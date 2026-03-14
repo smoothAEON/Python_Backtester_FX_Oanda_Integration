@@ -1,15 +1,14 @@
 """SMC indicators backed by the ``smartmoneyconcepts`` package.
 
-All indicators except ICTFibEngine (FIBOTE) and premium_discount
-delegate to ``smartmoneyconcepts.smc``.
+Most helpers delegate directly to ``smartmoneyconcepts.smc``.
+``premium_discount`` remains local, and ``ICTFibEngine`` builds
+its frozen fib state on top of the shared upstream swing-high/low
+contract.
 
 Source: https://github.com/joshyattridge/smart-money-concepts
 """
 
 from smartmoneyconcepts import smc as _smc
-
-from .ict_fib import ICTFibEngine
-from .premium_discount import premium_discount
 
 # ---------------------------------------------------------------------------
 # Thin wrappers around upstream ``smc.*`` functions
@@ -50,6 +49,10 @@ def sessions(ohlc, session, start_time="", end_time="", time_zone="UTC"):
 def retracements(ohlc, swing_highs_lows_df):
     """Upstream retracement metrics."""
     return _smc.retracements(ohlc, swing_highs_lows_df)
+
+
+from .ict_fib import ICTFibEngine
+from .premium_discount import premium_discount
 
 
 __all__ = [

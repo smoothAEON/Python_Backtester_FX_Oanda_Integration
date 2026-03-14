@@ -1,8 +1,8 @@
-"""ICT Optimal Trade Entry helper built from confirmed close-only swings.
+"""ICT Optimal Trade Entry helper built from shared SMC swings.
 
 Example:
     >>> from backtester.indicators import ICTFibEngine
-    >>> engine = ICTFibEngine(left_bars=2, right_bars=2)
+    >>> engine = ICTFibEngine(swing_length=3)
     >>> fib = engine.update(strategy.to_ohlcv_dataframe())
     >>> if fib is not None and fib["direction"] == "up":
     ...     discount_entry = fib["ote_zone"]["lower"]
@@ -18,6 +18,7 @@ import math
 import numpy as np
 import pandas as pd
 
+from . import swing_highs_lows
 from ..talib_indicators import atr
 
 
@@ -30,6 +31,24 @@ def _coerce_ohlc_frame(ohlc: pd.DataFrame) -> pd.DataFrame:
     frame = ohlc.loc[:, list(required)].copy()
     for column in required:
         frame[column] = pd.to_numeric(frame[column], errors="raise")
+    return frame
+
+
+def _coerce_swing_frame(
+    swing_frame: pd.DataFrame,
+    index: pd.Index,
+) -> pd.DataFrame:
+    """Validate and normalise a swing-highs-lows DataFrame."""
+    required = ("HighLow", "Level")
+    missing = [column for column in required if column not in swing_frame.columns]
+    if missing:
+        raise ValueError(f"Missing required swing columns: {missing}")
+    frame = swing_frame.loc[:, list(required)].copy()
+    if len(frame) != len(index):
+        raise ValueError("swing_highs_lows must have the same length as ohlc")
+    frame.index = index
+    for column in required:
+        frame[column] = pd.to_numeric(frame[column], errors="coerce")
     return frame
 
 _HIGH_PIVOT = 1
@@ -46,38 +65,47 @@ class _ConfirmedPivot:
     price: float
 
     def signature(self) -> PivotSignature:
-        return (self.index, self.side, self.price)
+        return (int(self.index), int(self.side), float(self.price))
 
     def as_dict(self) -> dict[str, object]:
         return {
-            "index": self.index,
+            "index": int(self.index),
             "kind": "high" if self.side == _HIGH_PIVOT else "low",
-            "price": self.price,
+            "price": float(self.price),
         }
 
 
 class ICTFibEngine:
-    """Track the latest frozen ICT OTE fib from confirmed close-only pivots."""
+    """Track the latest frozen ICT OTE fib from shared swing-high/low pivots."""
 
     def __init__(
         self,
         *,
-        left_bars: int = 3,
-        right_bars: int = 3,
+        swing_length: int | None = None,
         atr_period: int = 14,
         atr_multiplier: float | None = None,
+        **legacy_params: object,
     ) -> None:
-        if left_bars <= 0:
-            raise ValueError("left_bars must be positive")
-        if right_bars <= 0:
-            raise ValueError("right_bars must be positive")
+        legacy_names = sorted(
+            name for name in ("left_bars", "right_bars") if name in legacy_params
+        )
+        if legacy_names:
+            raise TypeError(
+                "ICTFibEngine now requires swing_length; left_bars/right_bars are no longer supported"
+            )
+        if legacy_params:
+            unexpected = ", ".join(sorted(legacy_params))
+            raise TypeError(f"Unexpected ICTFibEngine parameters: {unexpected}")
+        if swing_length is None:
+            raise ValueError("swing_length must be provided explicitly")
         if atr_period <= 0:
             raise ValueError("atr_period must be positive")
         if atr_multiplier is not None and atr_multiplier <= 0:
             raise ValueError("atr_multiplier must be positive when provided")
 
-        self.left_bars = int(left_bars)
-        self.right_bars = int(right_bars)
+        self.swing_length = int(swing_length)
+        if self.swing_length <= 0:
+            raise ValueError("swing_length must be positive")
         self.atr_period = int(atr_period)
         self.atr_multiplier = float(atr_multiplier) if atr_multiplier is not None else None
         self.reset()
@@ -103,6 +131,7 @@ class ICTFibEngine:
         self._active_fib: dict[str, object] | None = None
         self._last_fib_signature: PairSignature | None = None
         self._last_handled_pair_signature: PairSignature | None = None
+        self._processed_pivot_signatures: set[PivotSignature] = set()
         self._processed_length = 0
 
     def update(self, ohlc: pd.DataFrame) -> dict[str, object] | None:
@@ -115,42 +144,42 @@ class ICTFibEngine:
                 "ICTFibEngine only supports append-only updates; call reset() for shorter inputs"
             )
 
-        close_values = frame["close"].to_numpy(dtype=float)
-        for closed_bar_index in range(self._processed_length, length):
-            candidate_index = closed_bar_index - self.right_bars
-            pivot = self._confirm_pivot(close_values, candidate_index)
-            if pivot is None:
-                continue
-            self._ingest_pivot(frame, pivot)
+        swing_frame = _coerce_swing_frame(
+            swing_highs_lows(frame, swing_length=self.swing_length),
+            frame.index,
+        )
+        self._ingest_swing_candidates(frame, swing_frame)
 
         self._processed_length = length
         return self.active_fib
 
-    def _confirm_pivot(
+    def _ingest_swing_candidates(
         self,
-        close_values: np.ndarray,
-        candidate_index: int,
-    ) -> _ConfirmedPivot | None:
-        if candidate_index < self.left_bars:
-            return None
-        if candidate_index + self.right_bars >= len(close_values):
-            return None
+        frame: pd.DataFrame,
+        swing_frame: pd.DataFrame,
+    ) -> None:
+        high_low_values = swing_frame["HighLow"].to_numpy(dtype=float)
+        candidate_positions = np.where(~np.isnan(high_low_values))[0]
+        final_index = len(swing_frame) - 1
 
-        candidate_close = float(close_values[candidate_index])
-        left_window = close_values[candidate_index - self.left_bars : candidate_index]
-        right_window = close_values[
-            candidate_index + 1 : candidate_index + self.right_bars + 1
-        ]
+        for position in candidate_positions:
+            if position == final_index:
+                continue
 
-        if candidate_close > float(np.max(left_window)) and candidate_close > float(
-            np.max(right_window)
-        ):
-            return _ConfirmedPivot(candidate_index, _HIGH_PIVOT, candidate_close)
-        if candidate_close < float(np.min(left_window)) and candidate_close < float(
-            np.min(right_window)
-        ):
-            return _ConfirmedPivot(candidate_index, _LOW_PIVOT, candidate_close)
-        return None
+            side_value = float(swing_frame["HighLow"].iloc[position])
+            level_value = float(swing_frame["Level"].iloc[position])
+            if math.isnan(level_value):
+                continue
+            if side_value not in (_HIGH_PIVOT, _LOW_PIVOT):
+                continue
+
+            pivot = _ConfirmedPivot(int(position), int(side_value), float(level_value))
+            signature = pivot.signature()
+            if signature in self._processed_pivot_signatures:
+                continue
+
+            self._processed_pivot_signatures.add(signature)
+            self._ingest_pivot(frame, pivot)
 
     def _ingest_pivot(self, frame: pd.DataFrame, pivot: _ConfirmedPivot) -> None:
         if not self._confirmed_pivots:

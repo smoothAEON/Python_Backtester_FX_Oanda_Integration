@@ -74,8 +74,7 @@ class InstrumentApiObservationStrategy(BaseStrategy):
         context_fib = self.instrument_api.indicator(
             "H4",
             "ict_fib",
-            left_bars=1,
-            right_bars=1,
+            swing_length=1,
             atr_period=2,
         )
         snapshot = self.indicator_snapshot(
@@ -137,6 +136,7 @@ class InstrumentApiErrorStrategy(BaseStrategy):
             "unknown_timeframe": lambda: self.instrument_api.ohlcv("D"),
             "unknown_indicator": lambda: self.instrument_api.indicator("H1", "not_a_real_indicator"),
             "invalid_param": lambda: self.instrument_api.indicator("H1", "ema", period=0),
+            "missing_ict_fib_swing_length": lambda: self.instrument_api.indicator("H1", "ict_fib"),
             "unsupported_source": lambda: self.instrument_api.indicator(
                 "H1",
                 "atr",
@@ -297,6 +297,9 @@ def test_instrument_api_rejects_invalid_requests_cleanly(make_oanda_frame):
     assert "Available timeframes: H1, H4" in InstrumentApiErrorStrategy.errors["unknown_timeframe"]
     assert "Unknown built-in indicator" in InstrumentApiErrorStrategy.errors["unknown_indicator"]
     assert "period must be positive" in InstrumentApiErrorStrategy.errors["invalid_param"]
+    assert "ict_fib requires explicit swing_length" in InstrumentApiErrorStrategy.errors[
+        "missing_ict_fib_swing_length"
+    ]
     assert "does not accept a source parameter" in InstrumentApiErrorStrategy.errors["unsupported_source"]
 
 

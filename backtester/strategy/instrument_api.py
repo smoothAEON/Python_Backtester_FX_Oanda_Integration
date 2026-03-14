@@ -4,33 +4,18 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
 
-from backtester.indicators import (
-    ICTFibEngine,
-    adx,
-    atr,
-    bollinger_bands,
-    bos_choch,
-    ema,
-
-    liquidity,
-    macd,
-    ob,
-    premium_discount,
-    previous_high_low,
-    retracements,
+from backtester.indicators.scipy_indicators import (
     rolling_linreg_slope,
     rolling_zscore,
-    rsi,
     savgol_smooth,
-    sessions,
-    sma,
-    swing_highs_lows,
 )
+from backtester.indicators.talib_indicators import adx, atr, bollinger_bands, ema, macd, rsi, sma
 
 PriceSide = Literal["mid", "bid", "ask"]
 IndicatorOutput = pd.Series | pd.DataFrame | dict[str, Any] | np.ndarray | float | int | None
@@ -265,53 +250,57 @@ class InstrumentRuntime:
             return adx(frame["high"], frame["low"], frame["close"], **params)
         if name == "swing_highs_lows":
             self._reject_source(name, source)
-            return swing_highs_lows(frame, **params)
+            return _smc_exports()["swing_highs_lows"](frame, **params)
         if name == "bos_choch":
             self._reject_source(name, source)
             params, swing_params = self._split_swing_params(params)
             swings = self._indicator_result(timeframe, "swing_highs_lows", None, swing_params)
             if not isinstance(swings, pd.DataFrame):
                 raise TypeError("swing_highs_lows must resolve to a DataFrame")
-            return bos_choch(frame, swings, **params)
+            return _smc_exports()["bos_choch"](frame, swings, **params)
         if name == "ob":
             self._reject_source(name, source)
             params, swing_params = self._split_swing_params(params)
             swings = self._indicator_result(timeframe, "swing_highs_lows", None, swing_params)
             if not isinstance(swings, pd.DataFrame):
                 raise TypeError("swing_highs_lows must resolve to a DataFrame")
-            return ob(frame, swings, **params)
+            return _smc_exports()["ob"](frame, swings, **params)
         if name == "liquidity":
             self._reject_source(name, source)
             params, swing_params = self._split_swing_params(params)
             swings = self._indicator_result(timeframe, "swing_highs_lows", None, swing_params)
             if not isinstance(swings, pd.DataFrame):
                 raise TypeError("swing_highs_lows must resolve to a DataFrame")
-            return liquidity(frame, swings, **params)
+            return _smc_exports()["liquidity"](frame, swings, **params)
         if name == "premium_discount":
             self._reject_source(name, source)
             params, swing_params = self._split_swing_params(params)
             swings = self._indicator_result(timeframe, "swing_highs_lows", None, swing_params)
             if not isinstance(swings, pd.DataFrame):
                 raise TypeError("swing_highs_lows must resolve to a DataFrame")
-            return premium_discount(frame, swings, **params)
+            return _smc_exports()["premium_discount"](frame, swings, **params)
         if name == "ict_fib":
             self._reject_source(name, source)
-            engine = ICTFibEngine(**params)
+            if "swing_length" not in params and not (
+                {"left_bars", "right_bars"} & set(params)
+            ):
+                raise ValueError("ict_fib requires explicit swing_length")
+            engine = _smc_exports()["ICTFibEngine"](**params)
             return engine.update(frame)
 
         if name == "previous_high_low":
             self._reject_source(name, source)
-            return previous_high_low(frame, **params)
+            return _smc_exports()["previous_high_low"](frame, **params)
         if name == "sessions":
             self._reject_source(name, source)
-            return sessions(frame, **params)
+            return _smc_exports()["sessions"](frame, **params)
         if name == "retracements":
             self._reject_source(name, source)
             params, swing_params = self._split_swing_params(params)
             swings = self._indicator_result(timeframe, "swing_highs_lows", None, swing_params)
             if not isinstance(swings, pd.DataFrame):
                 raise TypeError("swing_highs_lows must resolve to a DataFrame")
-            return retracements(frame, swings, **params)
+            return _smc_exports()["retracements"](frame, swings, **params)
 
         raise ValueError(f"Unknown built-in indicator: {name!r}")
 
@@ -435,3 +424,30 @@ def _stable_value(value: Any) -> Any:
     if isinstance(value, pd.Timedelta):
         return value.isoformat()
     return value
+
+
+@lru_cache(maxsize=1)
+def _smc_exports() -> dict[str, Any]:
+    from backtester.indicators import (
+        ICTFibEngine,
+        bos_choch,
+        liquidity,
+        ob,
+        premium_discount,
+        previous_high_low,
+        retracements,
+        sessions,
+        swing_highs_lows,
+    )
+
+    return {
+        "ICTFibEngine": ICTFibEngine,
+        "bos_choch": bos_choch,
+        "liquidity": liquidity,
+        "ob": ob,
+        "premium_discount": premium_discount,
+        "previous_high_low": previous_high_low,
+        "retracements": retracements,
+        "sessions": sessions,
+        "swing_highs_lows": swing_highs_lows,
+    }

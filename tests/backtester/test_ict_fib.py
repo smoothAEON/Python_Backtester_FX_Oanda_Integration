@@ -7,15 +7,12 @@ from backtester.indicators import ICTFibEngine
 
 
 def _make_frame(
-    closes: list[float],
-    *,
-    highs: list[float] | None = None,
-    lows: list[float] | None = None,
+    highs: list[float],
+    lows: list[float],
+    closes: list[float] | None = None,
 ) -> pd.DataFrame:
-    if highs is None:
-        highs = [close + 0.5 for close in closes]
-    if lows is None:
-        lows = [close - 0.5 for close in closes]
+    if closes is None:
+        closes = [(high + low) / 2.0 for high, low in zip(highs, lows, strict=True)]
 
     rows: list[dict[str, float]] = []
     previous_close = float(closes[0])
@@ -32,80 +29,107 @@ def _make_frame(
     return pd.DataFrame(rows)
 
 
-def test_ict_fib_uses_close_only_pivots_and_close_only_anchors():
+def test_ict_fib_requires_explicit_swing_length():
+    with pytest.raises(ValueError, match="swing_length must be provided explicitly"):
+        ICTFibEngine()
+
+
+def test_ict_fib_rejects_legacy_pivot_params():
+    with pytest.raises(
+        TypeError,
+        match="swing_length; left_bars/right_bars are no longer supported",
+    ):
+        ICTFibEngine(left_bars=1, right_bars=1)
+
+
+def test_ict_fib_uses_smc_swing_levels_for_wick_based_anchors():
     frame = _make_frame(
-        [9.0, 8.0, 12.0, 11.0, 7.0],
-        highs=[9.5, 40.0, 12.5, 50.0, 7.5],
-        lows=[8.5, 1.0, 11.5, 10.5, 0.5],
+        [10.0, 20.0, 15.0, 14.0],
+        [5.0, 6.0, 7.0, 8.0],
+        closes=[7.5, 13.0, 11.0, 11.0],
     )
-    engine = ICTFibEngine(left_bars=1, right_bars=1)
+    engine = ICTFibEngine(swing_length=1)
 
     fib = engine.update(frame)
 
     assert fib is not None
     assert fib["direction"] == "up"
-    assert fib["start_idx"] == 1
-    assert fib["end_idx"] == 2
-    assert fib["start_price"] == 8.0
-    assert fib["end_price"] == 12.0
+    assert fib["start_idx"] == 0
+    assert fib["end_idx"] == 1
+    assert fib["start_price"] == 5.0
+    assert fib["end_price"] == 20.0
     assert engine.confirmed_pivots == (
-        {"index": 1, "kind": "low", "price": 8.0},
-        {"index": 2, "kind": "high", "price": 12.0},
+        {"index": 0, "kind": "low", "price": 5.0},
+        {"index": 1, "kind": "high", "price": 20.0},
     )
 
 
-def test_ict_fib_waits_for_right_bar_confirmation_before_using_a_pivot():
-    frame = _make_frame([11.0, 8.0, 12.0, 10.0, 9.0])
-    engine = ICTFibEngine(left_bars=1, right_bars=2)
+def test_ict_fib_ignores_a_swing_on_the_current_final_bar_until_next_bar():
+    frame = _make_frame(
+        [10.0, 20.0, 15.0, 14.0, 16.0],
+        [5.0, 6.0, 7.0, 4.0, 8.0],
+    )
+    engine = ICTFibEngine(swing_length=1)
 
     early = engine.update(frame.iloc[:4])
 
-    assert early is None
-    assert engine.confirmed_pivots == ({"index": 1, "kind": "low", "price": 8.0},)
+    assert early is not None
+    assert early["direction"] == "up"
+    assert engine.confirmed_pivots == (
+        {"index": 0, "kind": "low", "price": 5.0},
+        {"index": 1, "kind": "high", "price": 20.0},
+    )
 
-    confirmed = engine.update(frame.iloc[:5])
+    confirmed = engine.update(frame)
 
     assert confirmed is not None
-    assert confirmed["direction"] == "up"
+    assert confirmed["direction"] == "down"
     assert confirmed["start_idx"] == 1
-    assert confirmed["end_idx"] == 2
-
-
-def test_ict_fib_keeps_existing_fib_frozen_until_a_new_opposite_pivot_confirms():
-    frame = _make_frame(
-        [11.0, 10.0, 8.0, 12.0, 11.0, 13.0, 12.5, 12.0, 14.0, 11.0, 10.0, 12.0, 11.0]
+    assert confirmed["end_idx"] == 3
+    assert engine.confirmed_pivots == (
+        {"index": 0, "kind": "low", "price": 5.0},
+        {"index": 1, "kind": "high", "price": 20.0},
+        {"index": 3, "kind": "low", "price": 4.0},
     )
-    engine = ICTFibEngine(left_bars=2, right_bars=2)
 
-    first_fib = engine.update(frame.iloc[:8])
+
+def test_ict_fib_keeps_existing_fib_frozen_while_a_higher_same_side_swing_replaces_the_anchor():
+    frame = _make_frame(
+        [10.0, 20.0, 15.0, 22.0, 18.0, 17.0, 21.0],
+        [9.0, 8.0, 7.0, 6.0, 5.0, 4.0, 6.0],
+    )
+    engine = ICTFibEngine(swing_length=1)
+
+    first_fib = engine.update(frame.iloc[:4])
 
     assert first_fib is not None
     assert first_fib["direction"] == "up"
-    assert first_fib["start_idx"] == 2
-    assert first_fib["end_idx"] == 5
+    assert first_fib["start_idx"] == 0
+    assert first_fib["end_idx"] == 1
 
-    frozen_after_higher_high = engine.update(frame.iloc[:11])
+    frozen_after_higher_high = engine.update(frame.iloc[:6])
 
     assert frozen_after_higher_high == first_fib
     assert engine.confirmed_pivots == (
-        {"index": 2, "kind": "low", "price": 8.0},
-        {"index": 8, "kind": "high", "price": 14.0},
+        {"index": 0, "kind": "low", "price": 9.0},
+        {"index": 3, "kind": "high", "price": 22.0},
     )
+    assert engine.last_fib_signature == ((0, -1, 9.0), (1, 1, 20.0))
 
     bearish_fib = engine.update(frame)
 
     assert bearish_fib is not None
     assert bearish_fib["direction"] == "down"
-    assert bearish_fib["start_idx"] == 8
-    assert bearish_fib["end_idx"] == 10
-    assert bearish_fib["start_price"] == 14.0
-    assert bearish_fib["end_price"] == 10.0
+    assert bearish_fib["start_idx"] == 3
+    assert bearish_fib["end_idx"] == 5
+    assert bearish_fib["start_price"] == 22.0
+    assert bearish_fib["end_price"] == 4.0
 
 
 def test_ict_fib_does_not_regenerate_the_same_pair_on_repeated_updates():
-    frame = _make_frame([10.0, 8.0, 12.0, 11.0])
-    extended = _make_frame([10.0, 8.0, 12.0, 11.0, 10.0])
-    engine = ICTFibEngine(left_bars=1, right_bars=1)
+    frame = _make_frame([10.0, 20.0, 15.0, 14.0], [5.0, 6.0, 7.0, 8.0])
+    extended = _make_frame([10.0, 20.0, 15.0, 14.0, 13.0], [5.0, 6.0, 7.0, 8.0, 9.0])
+    engine = ICTFibEngine(swing_length=1)
 
     fib = engine.update(frame)
     signature = engine.last_fib_signature
@@ -119,78 +143,76 @@ def test_ict_fib_does_not_regenerate_the_same_pair_on_repeated_updates():
     assert engine.last_fib_signature == signature
     assert engine.last_handled_pair_signature == signature
     assert engine.confirmed_pivots == (
-        {"index": 1, "kind": "low", "price": 8.0},
-        {"index": 2, "kind": "high", "price": 12.0},
+        {"index": 0, "kind": "low", "price": 5.0},
+        {"index": 1, "kind": "high", "price": 20.0},
     )
 
 
 def test_ict_fib_bullish_ote_levels_match_expected_prices():
-    frame = _make_frame([10.0, 8.0, 12.0, 11.0])
-    engine = ICTFibEngine(left_bars=1, right_bars=1)
+    frame = _make_frame([10.0, 20.0, 15.0, 14.0], [5.0, 6.0, 7.0, 8.0])
+    engine = ICTFibEngine(swing_length=1)
 
     fib = engine.update(frame)
 
     assert fib is not None
-    assert fib["levels"]["0.0"] == 8.0
-    assert fib["levels"]["0.5"] == 10.0
-    assert fib["levels"]["0.62"] == pytest.approx(9.52)
-    assert fib["levels"]["0.705"] == pytest.approx(9.18)
-    assert fib["levels"]["0.79"] == pytest.approx(8.84)
-    assert fib["levels"]["1.0"] == 12.0
+    assert fib["levels"]["0.0"] == 5.0
+    assert fib["levels"]["0.5"] == 12.5
+    assert fib["levels"]["0.62"] == pytest.approx(10.7)
+    assert fib["levels"]["0.705"] == pytest.approx(9.425)
+    assert fib["levels"]["0.79"] == pytest.approx(8.15)
+    assert fib["levels"]["1.0"] == 20.0
     assert fib["ote_zone"] == {
-        "upper": pytest.approx(9.52),
-        "mid": pytest.approx(9.18),
-        "lower": pytest.approx(8.84),
+        "upper": pytest.approx(10.7),
+        "mid": pytest.approx(9.425),
+        "lower": pytest.approx(8.15),
     }
 
 
 def test_ict_fib_bearish_ote_levels_match_expected_prices():
-    frame = _make_frame([10.0, 14.0, 10.0, 12.0])
-    engine = ICTFibEngine(left_bars=1, right_bars=1)
+    frame = _make_frame(
+        [10.0, 20.0, 15.0, 14.0, 16.0],
+        [5.0, 6.0, 7.0, 4.0, 8.0],
+    )
+    engine = ICTFibEngine(swing_length=1)
 
     fib = engine.update(frame)
 
     assert fib is not None
     assert fib["direction"] == "down"
-    assert fib["levels"]["0.0"] == 14.0
+    assert fib["levels"]["0.0"] == 20.0
     assert fib["levels"]["0.5"] == 12.0
-    assert fib["levels"]["0.62"] == pytest.approx(12.48)
-    assert fib["levels"]["0.705"] == pytest.approx(12.82)
-    assert fib["levels"]["0.79"] == pytest.approx(13.16)
-    assert fib["levels"]["1.0"] == 10.0
+    assert fib["levels"]["0.62"] == pytest.approx(13.92)
+    assert fib["levels"]["0.705"] == pytest.approx(15.28)
+    assert fib["levels"]["0.79"] == pytest.approx(16.64)
+    assert fib["levels"]["1.0"] == 4.0
     assert fib["ote_zone"] == {
-        "upper": pytest.approx(13.16),
-        "mid": pytest.approx(12.82),
-        "lower": pytest.approx(12.48),
+        "upper": pytest.approx(16.64),
+        "mid": pytest.approx(15.28),
+        "lower": pytest.approx(13.92),
     }
 
 
 def test_ict_fib_optional_atr_filter_skips_small_swings_without_retrying_same_pair():
     frame = _make_frame(
-        [10.0, 9.0, 10.2, 10.0, 10.1],
-        highs=[15.0, 15.0, 15.0, 15.0, 15.0],
-        lows=[5.0, 5.0, 5.0, 5.0, 5.0],
-    )
-    extended = _make_frame(
-        [10.0, 9.0, 10.2, 10.0, 10.1, 10.15],
-        highs=[15.0, 15.0, 15.0, 15.0, 15.0, 15.0],
-        lows=[5.0, 5.0, 5.0, 5.0, 5.0, 5.0],
+        [10.1, 10.2, 10.1, 10.15],
+        [10.0, 10.0, 10.0, 10.05],
+        closes=[100.0, 0.0, 100.0, 100.0],
     )
     engine = ICTFibEngine(
-        left_bars=1,
-        right_bars=1,
-        atr_period=2,
+        swing_length=1,
+        atr_period=1,
         atr_multiplier=0.5,
     )
 
-    skipped = engine.update(frame)
+    skipped = engine.update(frame.iloc[:3])
     handled_signature = engine.last_handled_pair_signature
-    repeated = engine.update(frame)
-    extended_result = engine.update(extended)
+    repeated = engine.update(frame.iloc[:3])
+    extended_result = engine.update(frame)
 
     assert skipped is None
     assert repeated is None
     assert extended_result is None
     assert handled_signature is not None
     assert engine.last_fib_signature is None
-    assert engine.last_handled_pair_signature == handled_signature
+    assert engine.last_handled_pair_signature == ((1, 1, 10.2), (2, -1, 10.0))
+

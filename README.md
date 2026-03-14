@@ -37,6 +37,7 @@ backtester/                 # backtrader-based backtesting engine
   performance/              #   Metrics, analysis, and run comparison
   optimization/             #   Grid, random, and scipy optimizers
   reporting/                #   JSON, CSV, HTML, and chart exporters
+  examples/                 #   Public example strategies used by the docs
 tests/                      # pytest suites for backtester and extractor
 plans/                      # Phase plans and progress tracker
 ```
@@ -61,20 +62,11 @@ Requires `OANDA_API_KEY` and `OANDA_ACCOUNT_ID` set in environment or in `oanda-
 ### Run a backtest
 
 ```python
-import backtrader as bt
+from backtester.examples import QuickstartStrategy
 from backtester.run_backtest import run_backtest
 
-
-class MyStrategy(bt.Strategy):
-    def next(self):
-        if not self.position:
-            self.buy(size=1)
-        elif len(self) >= 3 and self.position:
-            self.close()
-
-
 result = run_backtest(
-    MyStrategy,
+    QuickstartStrategy,
     instrument="EUR_USD",
     timeframe="D",
     csv_path="oanda-candle-extractor/data/EUR_USD/candles_EUR_USD_D.csv",
@@ -88,17 +80,17 @@ print(result.closed_trade_ledger[["status_name", "pnlcomm"]].tail())
 
 ```bash
 python -m backtester.run_backtest \
-  --csv-path oanda-candle-extractor/data/XAU_USD/candles_XAU_USD_H1.csv \
-  --instrument XAU_USD \
-  --timeframe H1 \
-  --strategy-module strategies.my_strategy \
-  --strategy-class MyStrategy
+  --csv-path oanda-candle-extractor/data/EUR_USD/candles_EUR_USD_D.csv \
+  --instrument EUR_USD \
+  --timeframe D \
+  --strategy-module backtester.examples \
+  --strategy-class QuickstartStrategy
 ```
 
 ### Run tests
 
 ```bash
-python -m pytest tests/backtester -q    # 109 tests
+python -m pytest tests/backtester -q    # 120 tests
 python -m pytest tests/extractor -q
 ```
 
@@ -181,7 +173,8 @@ See [plans/](plans/) for detailed phase docs and [plans/project_checker.md](plan
 
 | Document | Purpose |
 | ---------- | --------- |
-| [Backtester README](backtester/README.md) | Usage, examples, instrument API, and roadmap |
+| [Backtester README](backtester/README.md) | Workflow guide, CLI flags, config notes, and component links |
+| [Backtester API Index](backtester/API_INDEX.md) | Public class/function import paths |
 | [Extractor README](oanda-candle-extractor/README.md) | Extraction usage, rate limiting, and configuration |
 | [Master Plan](plans/backtester_plan.md) | Architecture and dependency plan |
 | [Phase Breakdown](plans/backtester_phases/) | Detailed phase specifications |
