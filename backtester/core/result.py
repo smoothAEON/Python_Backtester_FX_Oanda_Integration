@@ -8,7 +8,7 @@ from typing import Any
 import backtrader as bt
 import pandas as pd
 
-from backtester.config import BacktestConfig
+from backtester.config import BacktestConfig, InstrumentSpec, resolve_instrument_spec
 
 
 @dataclass(slots=True)
@@ -149,7 +149,9 @@ def build_backtest_result(
     timeframes: tuple[str, ...] | None = None,
     parameters: dict[str, Any],
     config: BacktestConfig,
+    instrument_spec: InstrumentSpec | None = None,
 ) -> BacktestResult:
+    active_spec = instrument_spec or resolve_instrument_spec(instrument)
     recorder = strategy.analyzers.phase1_recorder.get_analysis()
     analyzer_snapshots = {
         "drawdown": _to_builtin(strategy.analyzers.drawdown.get_analysis()),
@@ -263,6 +265,10 @@ def build_backtest_result(
             "same_bar_policy": config.execution.same_bar_policy,
             "commission": config.execution.commission,
             "slippage": config.execution.slippage,
+            "account_currency": "USD",
+            "margin_model": "notional_margin",
+            "leverage": config.execution.leverage,
+            "point_value": active_spec.point_value,
         },
         timeframes=tuple(timeframes or (timeframe,)),
     )

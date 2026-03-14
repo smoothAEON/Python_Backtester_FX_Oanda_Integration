@@ -22,7 +22,7 @@ A deterministic, bid/ask-aware backtesting system built on **backtrader** for OA
 - **Position sizing** — fixed-lot, risk-percent, Kelly criterion, and volatility-based sizing
 - **Optimization** — grid search, random search, and scipy-based optimization
 - **Reporting** — JSON, CSV, HTML reports with matplotlib charts
-- **Rate-limited extraction** — paced at 119 rps with gap-only date-range fetching and atomic CSV caching
+- **Rate-limited extraction** — single-instrument and fixed-universe batch CLIs with gap-only date-range fetching, transient retry hardening, and atomic CSV caching
 
 ## Project Structure
 
@@ -55,6 +55,7 @@ python -m pip install -r oanda-candle-extractor/requirements.txt
 
 ```bash
 python oanda-candle-extractor/extract_candles.py --instrument XAU_USD --timeframes 1h --count 500
+python oanda-candle-extractor/fetch_universe.py
 ```
 
 Requires `OANDA_API_KEY` and `OANDA_ACCOUNT_ID` set in environment or in `oanda-candle-extractor/.env`.
@@ -90,7 +91,7 @@ python -m backtester.run_backtest \
 ### Run tests
 
 ```bash
-python -m pytest tests/backtester -q    # 120 tests
+python -m pytest tests/backtester -q    # 136 tests
 python -m pytest tests/extractor -q
 ```
 
@@ -161,9 +162,9 @@ CSV path convention: `oanda-candle-extractor/data/<INSTRUMENT>/candles_<INSTRUME
 | Phase | Name | Status |
 | ------- | ------ | -------- |
 | 1-8 | Foundation through documentation | Done |
+| 9 | Universe candle fetching | Done |
 | 11 | Multi-timeframe backtesting | Done |
 | 12 | Master-owned instrument API | Done |
-| 9 | Universe candle fetching | Planned |
 | 10 | Strategy library and samples | Planned |
 | 13 | Repo consolidation and packaging | Planned |
 

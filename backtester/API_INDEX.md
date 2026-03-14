@@ -14,6 +14,8 @@ This index maps the current public backtester surfaces to their module paths.
 
 ## Config
 
+Relevant current fields: `ExecutionConfig.leverage` controls leveraged notional-margin simulation, and `InstrumentSpec.point_value` carries the static quote-currency-to-USD conversion used by sizing and P&L.
+
 | Symbol | Import Path |
 | ------ | ----------- |
 | `BacktestConfig` | `backtester.config.BacktestConfig` |

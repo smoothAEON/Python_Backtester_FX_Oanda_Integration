@@ -10,6 +10,7 @@ If you are starting from the repo root, read [../README.md](../README.md) first.
 - one CLI: `python -m backtester.run_backtest`
 - strict loader and validation support for the extractor's 14-column candle contract
 - bid/ask-aware execution on top of `backtrader`
+- USD-account FX valuation with explicit `point_value` metadata and leverage-aware margin usage
 - reusable strategy helpers, built-in indicators, position sizers, performance analysis, optimization, and reporting
 - a small public [`examples/`](examples/README.md) package for runnable documentation examples
 
@@ -145,9 +146,11 @@ Notes:
 Main types:
 
 - `BacktestConfig`: top-level settings for a run
-- `ExecutionConfig`: execution assumptions such as `same_bar_policy`
-- `InstrumentSpec`: per-instrument sizing metadata
-- `resolve_instrument_spec()`: conservative FX defaults plus explicit overrides such as `XAU_USD`
+- `ExecutionConfig`: execution assumptions such as `same_bar_policy` and `leverage`
+- `InstrumentSpec`: per-instrument sizing and valuation metadata, including `point_value`
+- `resolve_instrument_spec()`: conservative FX defaults plus explicit 16-instrument Phase 9 overrides with `pip_size`, `display_precision`, `price_step`, and `point_value`
+
+Current valuation assumes a USD account. Non-USD account conversion is out of scope.
 
 Minimal example:
 
@@ -156,12 +159,16 @@ from backtester.config import BacktestConfig, ExecutionConfig, resolve_instrumen
 
 config = BacktestConfig(
     cash=25_000.0,
-    execution=ExecutionConfig(same_bar_policy="worst_case_first"),
+    execution=ExecutionConfig(
+        same_bar_policy="worst_case_first",
+        leverage=20.0,
+    ),
 )
 spec = resolve_instrument_spec("EUR_USD")
 
 print(config.cash)
-print(spec.instrument, spec.pip_size)
+print(config.execution.leverage)
+print(spec.instrument, spec.pip_size, spec.display_precision, spec.price_step, spec.point_value)
 ```
 
 ## Multi-Timeframe Support

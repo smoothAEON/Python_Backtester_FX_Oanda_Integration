@@ -212,6 +212,80 @@ def test_fetch_candles_refreshes_stale_csv_incrementally(tmp_path, monkeypatch, 
     assert saved["time"].is_monotonic_increasing
 
 
+def test_extract_to_csv_preserves_broader_cached_history_in_count_mode(tmp_path, monkeypatch, make_candle_frame):
+    class DummyProvider:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    monkeypatch.setattr(extract_candles, "OANDADataProvider", DummyProvider)
+
+    extractor = extract_candles.OANDACandleExtractor(
+        api_key="token",
+        account_id="account",
+        data_dir=tmp_path,
+    )
+    full = make_candle_frame(datetime(2024, 1, 1, tzinfo=timezone.utc), periods=6, step_seconds=60)
+    extractor.csv.save_candles(full, "EUR_USD", "M1")
+    narrower = full.tail(3).reset_index(drop=True)
+
+    monkeypatch.setattr(extractor, "fetch_candles", lambda **kwargs: narrower)
+
+    output = extractor.extract_to_csv("EUR_USD", "1m", count=3)
+    saved = extractor.csv.load_candles("EUR_USD", "M1")
+
+    assert output == tmp_path / "EUR_USD" / "candles_EUR_USD_M1.csv"
+    assert saved is not None
+    assert len(saved) == 6
+    assert list(saved["time"]) == list(full["time"])
+
+
+def test_extract_to_csv_appends_new_candles_without_truncating_cached_history(
+    tmp_path,
+    monkeypatch,
+    make_candle_frame,
+):
+    extractor = extract_candles.OANDACandleExtractor(
+        api_key="token",
+        account_id="account",
+        data_dir=tmp_path,
+    )
+    start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    cached = make_candle_frame(start, periods=5, step_seconds=60)
+    extractor.csv.save_candles(cached, "EUR_USD", "M1")
+
+    fixed_now = start + timedelta(minutes=7)
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return fixed_now.replace(tzinfo=None)
+            return fixed_now.astimezone(tz)
+
+    monkeypatch.setattr(oanda_provider, "datetime", FixedDateTime)
+
+    updates = make_candle_frame(start + timedelta(minutes=5), periods=2, step_seconds=60, base_price=1.1070)
+
+    def fake_fetch_window_results(instrument, timeframe, windows, max_workers):
+        return {windows[0].index: updates}
+
+    monkeypatch.setattr(extractor.provider, "_fetch_window_results", fake_fetch_window_results)
+    monkeypatch.setattr(
+        extractor.provider,
+        "_fetch_candles_from_api",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected direct API fetch")),
+    )
+
+    output = extractor.extract_to_csv("EUR_USD", "1m", count=3)
+    saved = extractor.csv.load_candles("EUR_USD", "M1")
+
+    assert output == tmp_path / "EUR_USD" / "candles_EUR_USD_M1.csv"
+    assert saved is not None
+    assert len(saved) == 7
+    assert saved["time"].is_monotonic_increasing
+    assert list(saved["time"]) == list(extractor.provider._merge_frames(cached, updates)["time"])
+
+
 def test_fetch_candles_by_date_range_fetches_only_missing_gap(tmp_path, monkeypatch, make_candle_frame):
     provider = oanda_provider.OANDADataProvider(
         api_key="token",
@@ -242,6 +316,40 @@ def test_fetch_candles_by_date_range_fetches_only_missing_gap(tmp_path, monkeypa
     assert captured[0].include_first is False
     assert captured[0].start == full["time"].iloc[1].to_pydatetime()
     assert captured[0].end == full["time"].iloc[4].to_pydatetime()
+    assert list(result["time"]) == list(full["time"])
+
+
+def test_fetch_candles_by_date_range_reuses_full_cached_coverage_without_rewrite(
+    tmp_path,
+    monkeypatch,
+    make_candle_frame,
+):
+    provider = oanda_provider.OANDADataProvider(
+        api_key="token",
+        account_id="account",
+        data_dir=tmp_path,
+    )
+    start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    full = make_candle_frame(start, periods=6, step_seconds=60)
+    provider._csv.save_candles(full, "EUR_USD", "M1")
+    path = provider._csv.get_candle_path("EUR_USD", "M1")
+    before_signature = (path.stat().st_size, path.stat().st_mtime_ns)
+
+    monkeypatch.setattr(
+        provider,
+        "_fetch_window_task",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected gap fetch")),
+    )
+
+    result = provider.fetch_candles_by_date_range(
+        "EUR_USD",
+        "M1",
+        start_date=full["time"].iloc[0].to_pydatetime(),
+        end_date=full["time"].iloc[-1].to_pydatetime(),
+    )
+    after_signature = (path.stat().st_size, path.stat().st_mtime_ns)
+
+    assert before_signature == after_signature
     assert list(result["time"]) == list(full["time"])
 
 

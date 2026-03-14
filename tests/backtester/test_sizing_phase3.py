@@ -14,6 +14,25 @@ from backtester.sizing import (
 )
 from backtester.strategy import BaseStrategy
 
+PHASE9_CORE_INSTRUMENTS = (
+    ("EUR_USD", 0.0001, 5, 0.00001, 1.0),
+    ("USD_JPY", 0.01, 3, 0.001, 0.0067),
+    ("GBP_USD", 0.0001, 5, 0.00001, 1.0),
+    ("AUD_USD", 0.0001, 5, 0.00001, 1.0),
+    ("USD_CHF", 0.0001, 5, 0.00001, 1.14),
+    ("USD_CAD", 0.0001, 5, 0.00001, 0.74),
+    ("NZD_USD", 0.0001, 5, 0.00001, 1.0),
+    ("EUR_JPY", 0.01, 3, 0.001, 0.0067),
+    ("GBP_JPY", 0.01, 3, 0.001, 0.0067),
+    ("EUR_GBP", 0.0001, 5, 0.00001, 1.27),
+    ("EUR_CHF", 0.0001, 5, 0.00001, 1.14),
+    ("AUD_JPY", 0.01, 3, 0.001, 0.0067),
+    ("GBP_CHF", 0.0001, 5, 0.00001, 1.14),
+    ("EUR_AUD", 0.0001, 5, 0.00001, 0.65),
+    ("EUR_CAD", 0.0001, 5, 0.00001, 0.74),
+    ("XAU_USD", 0.01, 3, 0.001, 1.0),
+)
+
 
 class SwitchingSizerStrategy(BaseStrategy):
     snapshot: dict | None = None
@@ -123,10 +142,46 @@ def test_instrument_resolver_handles_xau_fx_and_jpy_pairs():
     jpy = resolve_instrument_spec("USD_JPY")
 
     assert xau.pip_size == 0.01
+    assert xau.display_precision == 3
+    assert xau.price_step == pytest.approx(0.001)
     assert eur.pip_size == 0.0001
+    assert eur.display_precision == 5
+    assert eur.price_step == pytest.approx(0.00001)
+    assert eur.point_value == pytest.approx(1.0)
     assert jpy.pip_size == 0.01
-    assert xau.min_size == 1.0
+    assert jpy.display_precision == 3
+    assert jpy.price_step == pytest.approx(0.001)
+    assert jpy.point_value == pytest.approx(0.0067)
+    assert xau.min_size == pytest.approx(0.1)
+    assert xau.size_step == pytest.approx(0.1)
+    assert xau.point_value == pytest.approx(1.0)
     assert eur.size_step == 1.0
+
+
+@pytest.mark.parametrize(
+    ("instrument", "pip_size", "display_precision", "price_step", "point_value"),
+    PHASE9_CORE_INSTRUMENTS,
+)
+def test_phase9_core_universe_has_explicit_metadata(
+    instrument,
+    pip_size,
+    display_precision,
+    price_step,
+    point_value,
+):
+    spec = resolve_instrument_spec(instrument)
+
+    assert spec.instrument == instrument
+    assert spec.pip_size == pytest.approx(pip_size)
+    assert spec.display_precision == display_precision
+    assert spec.price_step == pytest.approx(price_step)
+    assert spec.point_value == pytest.approx(point_value)
+    if instrument == "XAU_USD":
+        assert spec.min_size == pytest.approx(0.1)
+        assert spec.size_step == pytest.approx(0.1)
+    else:
+        assert spec.min_size == pytest.approx(1.0)
+        assert spec.size_step == pytest.approx(1.0)
 
 
 def test_fixed_lot_sizer_returns_configured_size_and_rounds_down():
@@ -140,11 +195,11 @@ def test_fixed_lot_sizer_returns_configured_size_and_rounds_down():
 
     assert decision.accepted is True
     assert decision.raw_size == pytest.approx(7.9)
-    assert decision.final_size == pytest.approx(7.0)
+    assert decision.final_size == pytest.approx(7.9)
 
 
 def test_fixed_lot_sizer_rejects_sizes_below_the_minimum():
-    decision = FixedLotSizer(0.9).size_for_entry(
+    decision = FixedLotSizer(0.09).size_for_entry(
         equity=10_000.0,
         side="long",
         entry_price=100.0,
@@ -180,6 +235,40 @@ def test_risk_percent_sizer_matches_hand_calculated_long_and_short_examples():
     assert short_decision.raw_size == pytest.approx(200.0)
     assert long_decision.final_size == pytest.approx(200.0)
     assert short_decision.final_size == pytest.approx(200.0)
+
+
+def test_risk_percent_sizer_scales_jpy_pairs_to_comparable_usd_risk():
+    sizer = RiskPercentSizer(0.01)
+
+    eur_decision = sizer.size_for_entry(
+        equity=10_000.0,
+        side="long",
+        entry_price=1.1000,
+        stop_price=1.0950,
+        instrument="EUR_USD",
+    )
+    jpy_decision = sizer.size_for_entry(
+        equity=10_000.0,
+        side="long",
+        entry_price=150.00,
+        stop_price=149.50,
+        instrument="USD_JPY",
+    )
+
+    assert eur_decision.accepted is True
+    assert jpy_decision.accepted is True
+    assert eur_decision.raw_size == pytest.approx(20_000.0)
+    assert jpy_decision.raw_size == pytest.approx(100.0 / (0.50 * 0.0067))
+    assert jpy_decision.final_size == pytest.approx(29_850.0)
+    assert jpy_decision.details["per_unit_risk"] == pytest.approx(0.00335)
+    assert (
+        eur_decision.final_size
+        * eur_decision.details["per_unit_risk"]
+    ) == pytest.approx(
+        jpy_decision.final_size
+        * jpy_decision.details["per_unit_risk"],
+        abs=0.01,
+    )
 
 
 @pytest.mark.parametrize(
@@ -288,9 +377,9 @@ def test_kelly_sizer_handles_bad_inputs_safely_and_caps_risk():
 @pytest.mark.parametrize(
     ("sizer_kind", "expected_method", "expected_size"),
     [
-        ("fixed", "fixed_lot", 7.0),
+        ("fixed", "fixed_lot", 7.9),
         ("risk_percent", "risk_percent", 50.0),
-        ("volatility", "volatility", 33.0),
+        ("volatility", "volatility", 33.3),
         ("kelly", "kelly", 50.0),
     ],
 )

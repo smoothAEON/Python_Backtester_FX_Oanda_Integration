@@ -270,6 +270,10 @@ def _build_backtest_result(
             "same_bar_policy": "worst_case_first",
             "commission": 0.0,
             "slippage": 0.0,
+            "account_currency": "USD",
+            "margin_model": "notional_margin",
+            "leverage": 30.0,
+            "point_value": 1.0,
         },
     )
 

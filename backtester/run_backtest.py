@@ -12,7 +12,7 @@ from typing import Any
 import backtrader as bt
 import pandas as pd
 
-from .config import BacktestConfig
+from .config import BacktestConfig, resolve_instrument_spec
 from .core.cerebro_builder import build_cerebro
 from .core.result import BacktestResult, build_backtest_result
 from .data.loader import OANDADataLoader
@@ -51,6 +51,8 @@ def run_backtest(
         raise ValueError("Provide exactly one of csv_path or dataframe")
 
     primary_timeframe = _normalize_timeframe_label(timeframe)
+    instrument_spec = resolve_instrument_spec(instrument)
+    normalized_instrument = instrument_spec.instrument
     ordered_context_sources = _normalize_context_data(
         context_data,
         primary_timeframe=primary_timeframe,
@@ -63,14 +65,20 @@ def run_backtest(
     else:
         normalized = loader.load_dataframe(dataframe)
 
-    feeds = [_build_data_feed(normalized, instrument=instrument, timeframe=primary_timeframe)]
+    feeds = [
+        _build_data_feed(
+            normalized,
+            instrument=normalized_instrument,
+            timeframe=primary_timeframe,
+        )
+    ]
     ordered_timeframes = [primary_timeframe]
     for context_timeframe, source in ordered_context_sources:
         context_frame = _load_source_dataframe(loader, source)
         feeds.append(
             _build_data_feed(
                 context_frame,
-                instrument=instrument,
+                instrument=normalized_instrument,
                 timeframe=context_timeframe,
             )
         )
@@ -81,6 +89,7 @@ def run_backtest(
         feeds,
         config=active_config,
         strategy_params=strategy_params,
+        instrument_spec=instrument_spec,
     )
 
     strategies = cerebro.run(tradehistory=True)
@@ -91,11 +100,12 @@ def run_backtest(
     params = dict(strategy_params or {})
     return build_backtest_result(
         strategy,
-        instrument=instrument,
+        instrument=normalized_instrument,
         timeframe=primary_timeframe,
         timeframes=tuple(ordered_timeframes),
         parameters=params,
         config=active_config,
+        instrument_spec=instrument_spec,
     )
 
 

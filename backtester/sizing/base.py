@@ -58,6 +58,8 @@ class BaseSizer(ABC):
             return InstrumentSpec(
                 instrument=str(instrument).strip().upper(),
                 pip_size=0.0001,
+                display_precision=5,
+                price_step=0.00001,
             )
 
     def _normalize_metadata(self, metadata: dict[str, Any] | None) -> dict[str, Any]:

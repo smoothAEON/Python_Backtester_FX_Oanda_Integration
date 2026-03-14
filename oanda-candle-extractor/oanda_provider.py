@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import random
 import threading
 import time
 from collections import deque
@@ -12,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 import pandas as pd
+import requests
 
 from oandapyV20 import API
 from oandapyV20.endpoints import instruments
@@ -22,6 +24,8 @@ from market_hours import MarketHours
 from rate_limiter import RateLimiter
 
 logger = logging.getLogger(__name__)
+
+RETRIABLE_V20_ERROR_CODES = frozenset({500, 502, 503, 504})
 
 
 @dataclass(frozen=True)
@@ -158,6 +162,10 @@ class OANDADataProvider:
         self._cache: Dict[tuple[str, str], dict[str, Any]] = {}
         self._min_cache_ttl_seconds = 30
         self._thread_state = threading.local()
+        self._request_timeout_seconds = 30.0
+        self._max_request_attempts = 4
+        self._retry_base_delay_seconds = 0.5
+        self._retry_max_delay_seconds = 8.0
 
         logger.info(
             "OANDADataProvider initialized for %s environment (target_rps=%s, max_workers=%s)",
@@ -170,11 +178,40 @@ class OANDADataProvider:
         """Get or create the worker-local API client."""
         client = getattr(self._thread_state, 'api_client', None)
         if client is None:
-            if not self._client_warmup_limiter.acquire(timeout=30.0):
+            if not self._client_warmup_limiter.acquire(timeout=self._request_timeout_seconds):
                 raise RuntimeError("Timed out while waiting to open a new OANDA connection")
             client = API(access_token=self._api_key, environment=self._account_type)
             self._thread_state.api_client = client
         return client
+
+    def _clear_api_client(self) -> None:
+        """Drop the worker-local API client so the next attempt creates a fresh session."""
+        if hasattr(self._thread_state, "api_client"):
+            delattr(self._thread_state, "api_client")
+
+    def _retry_delay_seconds(self, attempt_index: int) -> float:
+        """Return a capped exponential backoff with light jitter."""
+        base_delay = min(
+            self._retry_max_delay_seconds,
+            self._retry_base_delay_seconds * (2 ** attempt_index),
+        )
+        return base_delay + random.uniform(0.0, base_delay * 0.25)
+
+    def _sleep_for_retry(self, error: Exception, attempt_index: int) -> None:
+        """Sleep before retrying a transient request failure."""
+        delay_seconds = self._retry_delay_seconds(attempt_index)
+        logger.warning(
+            "Transient OANDA request failure on attempt %s/%s (%s). Retrying in %.2fs",
+            attempt_index + 1,
+            self._max_request_attempts,
+            error,
+            delay_seconds,
+        )
+        time.sleep(delay_seconds)
+
+    def _is_retriable_v20_error(self, error: V20Error) -> bool:
+        """Whether an OANDA API response should be retried."""
+        return error.code in RETRIABLE_V20_ERROR_CODES
 
     def _make_request(self, endpoint) -> dict:
         """
@@ -186,24 +223,39 @@ class OANDADataProvider:
         Returns:
             Response data
         """
-        if not self._rate_limiter.acquire(timeout=30.0):
-            raise RuntimeError("Rate limit timeout - too many requests")
+        last_error: Exception | None = None
 
-        client = self._get_api_client()
-        try:
-            response = client.request(endpoint)
-            self._rate_limiter.record_success()
-            return response
-        except V20Error as error:
-            if error.code == 429:
-                self._rate_limiter.record_429(self._extract_retry_after_seconds(error))
-                if not self._rate_limiter.acquire(timeout=30.0):
-                    raise RuntimeError("Rate limit timeout after 429 backoff") from error
-                retry_client = self._get_api_client()
-                response = retry_client.request(endpoint)
+        for attempt_index in range(self._max_request_attempts):
+            if not self._rate_limiter.acquire(timeout=self._request_timeout_seconds):
+                raise RuntimeError("Rate limit timeout - too many requests")
+
+            client = self._get_api_client()
+            try:
+                response = client.request(endpoint)
                 self._rate_limiter.record_success()
                 return response
-            raise
+            except V20Error as error:
+                last_error = error
+                if error.code == 429:
+                    self._rate_limiter.record_429(self._extract_retry_after_seconds(error))
+                    if attempt_index == self._max_request_attempts - 1:
+                        raise RuntimeError("Rate limit retries exhausted") from error
+                    continue
+                if self._is_retriable_v20_error(error):
+                    if attempt_index == self._max_request_attempts - 1:
+                        raise
+                    self._sleep_for_retry(error, attempt_index)
+                    continue
+                raise
+            except requests.RequestException as error:
+                last_error = error
+                self._clear_api_client()
+                if attempt_index == self._max_request_attempts - 1:
+                    raise
+                self._sleep_for_retry(error, attempt_index)
+                continue
+
+        raise RuntimeError("OANDA request retries exhausted") from last_error
 
     def _extract_retry_after_seconds(self, error: V20Error) -> Optional[float]:
         """Best-effort Retry-After extraction from an API error."""

@@ -181,6 +181,42 @@ class OANDACandleExtractor:
         """Get the canonical output path for a CSV file."""
         return self.csv.get_candle_path(instrument, timeframe)
 
+    def _output_signature(self, path: Path) -> tuple[int, int] | None:
+        """Return a stable file signature for change detection."""
+        if not path.exists():
+            return None
+        stat = path.stat()
+        return stat.st_size, stat.st_mtime_ns
+
+    def _finalize_output(
+        self,
+        instrument: str,
+        timeframe: str,
+        df: pd.DataFrame,
+        before_signature: tuple[int, int] | None,
+    ) -> tuple[Path, str]:
+        """
+        Resolve the canonical CSV path without truncating broader cached history.
+
+        Count-mode fetches can return only the last `count` rows while the provider
+        has already preserved a larger canonical CSV on disk. Only write the
+        returned frame when no canonical file exists after the provider call.
+        """
+        file_path = self._output_path(instrument, timeframe)
+        if not file_path.exists():
+            if not self.csv.save_candles(df, instrument, timeframe):
+                raise RuntimeError(f"Failed to persist candles for {instrument}/{timeframe}")
+
+        after_signature = self._output_signature(file_path)
+        if after_signature is None:
+            raise RuntimeError(f"Expected persisted candles at {file_path}")
+
+        if before_signature is None:
+            return file_path, "created"
+        if after_signature == before_signature:
+            return file_path, "reused"
+        return file_path, "updated"
+
     def fetch_candles(
         self,
         instrument: str,
@@ -251,6 +287,8 @@ class OANDACandleExtractor:
             normalized_instrument = normalize_instrument(instrument)
             normalized_tf = normalize_timeframe(timeframe)
             normalize_price(price)
+            file_path = self._output_path(normalized_instrument, normalized_tf)
+            before_signature = self._output_signature(file_path)
             df = self.fetch_candles(
                 instrument=normalized_instrument,
                 timeframe=normalized_tf,
@@ -264,9 +302,25 @@ class OANDACandleExtractor:
         if df.empty:
             return None
 
-        file_path = self._output_path(normalized_instrument, normalized_tf)
-        self.csv.save_candles(df, normalized_instrument, normalized_tf)
-        logger.info("Saved %s rows to %s", len(df), file_path)
+        try:
+            file_path, resolution = self._finalize_output(
+                normalized_instrument,
+                normalized_tf,
+                df,
+                before_signature,
+            )
+        except Exception as exc:
+            logger.error("Failed finalizing %s %s: %s", instrument, timeframe, exc)
+            return None
+
+        logger.info(
+            "Resolved %s %s to %s (%s existing data; returned_rows=%s)",
+            normalized_instrument,
+            normalized_tf,
+            file_path,
+            resolution,
+            len(df),
+        )
         return file_path
 
     def extract_date_range_to_csv(
@@ -280,6 +334,8 @@ class OANDACandleExtractor:
         try:
             normalized_instrument = normalize_instrument(instrument)
             normalized_tf = normalize_timeframe(timeframe)
+            file_path = self._output_path(normalized_instrument, normalized_tf)
+            before_signature = self._output_signature(file_path)
             df = self.fetch_candles_by_date_range(
                 instrument=normalized_instrument,
                 timeframe=normalized_tf,
@@ -293,8 +349,25 @@ class OANDACandleExtractor:
         if df.empty:
             return None
 
-        file_path = self._output_path(normalized_instrument, normalized_tf)
-        logger.info("Saved %s rows to %s", len(df), file_path)
+        try:
+            file_path, resolution = self._finalize_output(
+                normalized_instrument,
+                normalized_tf,
+                df,
+                before_signature,
+            )
+        except Exception as exc:
+            logger.error("Failed finalizing %s %s: %s", instrument, timeframe, exc)
+            return None
+
+        logger.info(
+            "Resolved %s %s to %s (%s existing data; returned_rows=%s)",
+            normalized_instrument,
+            normalized_tf,
+            file_path,
+            resolution,
+            len(df),
+        )
         return file_path
 
     def extract_all_timeframes(

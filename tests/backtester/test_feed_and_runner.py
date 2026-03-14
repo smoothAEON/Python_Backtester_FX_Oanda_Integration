@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import backtrader as bt
+import pytest
 
 from backtester.data.oanda_feed import OANDABidAskData
 from backtester.run_backtest import run_backtest
@@ -97,3 +98,7 @@ def test_run_backtest_returns_populated_result(make_oanda_frame):
     assert not result.trade_ledger.empty
     assert not result.equity_curve.empty
     assert result.execution_policy["same_bar_policy"] == "worst_case_first"
+    assert result.execution_policy["account_currency"] == "USD"
+    assert result.execution_policy["margin_model"] == "notional_margin"
+    assert result.execution_policy["leverage"] == pytest.approx(30.0)
+    assert result.execution_policy["point_value"] == pytest.approx(1.0)

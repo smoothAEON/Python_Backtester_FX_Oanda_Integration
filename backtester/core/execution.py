@@ -247,3 +247,84 @@ class BidAskBroker(BackBroker):
 
         for child in children:
             child.activate()
+
+    def _get_value(self, datas=None, lever=False):
+        """Value futures-like positions from entry-basis margin plus marked cash.
+
+        Backtrader's default futures-style path adds unrealized P&L on top of cash
+        that has already been mark-to-market adjusted each bar. That double-counts
+        open P&L for our leveraged FX model. Preserve the stock-like path unchanged
+        and value non-stocklike positions from entry-basis margin collateral instead.
+        """
+
+        pos_value = 0.0
+        pos_value_unlever = 0.0
+        unrealized = 0.0
+
+        while self._cash_addition:
+            addition = self._cash_addition.popleft()
+            self._fundshares += addition / self._fundval
+            self.cash += addition
+
+        for data in datas or self.positions:
+            comminfo = self.getcommissioninfo(data)
+            position = self.positions[data]
+            current_price = data.close[0]
+            entry_price = position.price or current_price
+
+            if comminfo.stocklike:
+                if not self.p.shortcash:
+                    dvalue = comminfo.getvalue(position, current_price)
+                else:
+                    dvalue = comminfo.getvaluesize(position.size, current_price)
+            else:
+                dvalue = abs(position.size) * comminfo.get_margin(entry_price)
+
+            dunrealized = comminfo.profitandloss(position.size, position.price, current_price)
+            if datas and len(datas) == 1:
+                if lever and dvalue > 0:
+                    if comminfo.stocklike:
+                        dvalue -= dunrealized
+                        return (dvalue / comminfo.get_leverage()) + dunrealized
+                    return dvalue / comminfo.get_leverage()
+                return dvalue if comminfo.stocklike else dvalue / comminfo.get_leverage()
+
+            if comminfo.stocklike and not self.p.shortcash:
+                dvalue = abs(dvalue)
+
+            pos_value += dvalue
+            unrealized += dunrealized
+
+            if dvalue > 0:
+                if comminfo.stocklike:
+                    dvalue -= dunrealized
+                    pos_value_unlever += dvalue / comminfo.get_leverage()
+                    pos_value_unlever += dunrealized
+                else:
+                    pos_value_unlever += dvalue / comminfo.get_leverage()
+            else:
+                pos_value_unlever += dvalue
+
+        if not self._fundhist:
+            self._value = value = self.cash + pos_value_unlever
+            self._fundval = self._value / self._fundshares
+        else:
+            fundval, fundvalue = self._process_fund_history()
+
+            self._value = fundvalue
+            self.cash = fundvalue - pos_value_unlever
+            self._fundval = fundval
+            self._fundshares = fundvalue / fundval
+            lev = pos_value / (pos_value_unlever or 1.0)
+
+            pos_value_unlever = fundvalue
+            pos_value = fundvalue * lev
+            value = fundvalue
+
+        self._valuemkt = pos_value_unlever
+        self._valuelever = self.cash + pos_value
+        self._valuemktlever = pos_value
+        self._leverage = pos_value / (pos_value_unlever or 1.0)
+        self._unrealized = unrealized
+
+        return value if not lever else self._valuelever
