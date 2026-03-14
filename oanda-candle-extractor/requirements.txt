@@ -1,0 +1,9 @@
+# OANDA Candle Extractor - Dependencies
+
+# Core dependencies
+oandapyV20>=0.7.2
+pandas>=2.0.0
+python-dotenv>=1.0.0
+
+# Optional: For enhanced logging
+colorlog>=6.7.0
