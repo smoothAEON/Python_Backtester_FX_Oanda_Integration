@@ -19,7 +19,18 @@ import numpy as np
 import pandas as pd
 
 from ..talib_indicators import atr
-from .structure import _coerce_ohlc_frame
+
+
+def _coerce_ohlc_frame(ohlc: pd.DataFrame) -> pd.DataFrame:
+    """Validate and normalise an OHLC DataFrame."""
+    required = ("open", "high", "low", "close")
+    missing = [column for column in required if column not in ohlc.columns]
+    if missing:
+        raise ValueError(f"Missing required OHLC columns: {missing}")
+    frame = ohlc.loc[:, list(required)].copy()
+    for column in required:
+        frame[column] = pd.to_numeric(frame[column], errors="raise")
+    return frame
 
 _HIGH_PIVOT = 1
 _LOW_PIVOT = -1

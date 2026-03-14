@@ -1,4 +1,9 @@
-"""Premium/discount zones derived from confirmed swings."""
+"""Premium/discount zones derived from confirmed swings.
+
+Uses upstream ``smartmoneyconcepts`` for swing detection while keeping
+the custom premium/discount zone classification that has no upstream
+equivalent.
+"""
 
 from __future__ import annotations
 
@@ -7,7 +12,35 @@ import math
 import numpy as np
 import pandas as pd
 
-from .structure import _coerce_ohlc_frame, _coerce_swing_frame
+
+def _coerce_ohlc_frame(ohlc: pd.DataFrame) -> pd.DataFrame:
+    """Validate and normalise an OHLC DataFrame."""
+    required = ("open", "high", "low", "close")
+    missing = [column for column in required if column not in ohlc.columns]
+    if missing:
+        raise ValueError(f"Missing required OHLC columns: {missing}")
+    frame = ohlc.loc[:, list(required)].copy()
+    for column in required:
+        frame[column] = pd.to_numeric(frame[column], errors="raise")
+    return frame
+
+
+def _coerce_swing_frame(
+    swing_highs_lows: pd.DataFrame,
+    index: pd.Index,
+) -> pd.DataFrame:
+    """Validate and normalise a swing-highs-lows DataFrame."""
+    required = ("HighLow", "Level")
+    missing = [column for column in required if column not in swing_highs_lows.columns]
+    if missing:
+        raise ValueError(f"Missing required swing columns: {missing}")
+    frame = swing_highs_lows.loc[:, list(required)].copy()
+    if len(frame) != len(index):
+        raise ValueError("swing_highs_lows must have the same length as ohlc")
+    frame.index = index
+    for column in required:
+        frame[column] = pd.to_numeric(frame[column], errors="coerce")
+    return frame
 
 
 def premium_discount(

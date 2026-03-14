@@ -16,14 +16,18 @@ from backtester.indicators import (
     bollinger_bands,
     bos_choch,
     ema,
+
     liquidity,
     macd,
     ob,
     premium_discount,
+    previous_high_low,
+    retracements,
     rolling_linreg_slope,
     rolling_zscore,
     rsi,
     savgol_smooth,
+    sessions,
     sma,
     swing_highs_lows,
 )
@@ -294,6 +298,20 @@ class InstrumentRuntime:
             self._reject_source(name, source)
             engine = ICTFibEngine(**params)
             return engine.update(frame)
+
+        if name == "previous_high_low":
+            self._reject_source(name, source)
+            return previous_high_low(frame, **params)
+        if name == "sessions":
+            self._reject_source(name, source)
+            return sessions(frame, **params)
+        if name == "retracements":
+            self._reject_source(name, source)
+            params, swing_params = self._split_swing_params(params)
+            swings = self._indicator_result(timeframe, "swing_highs_lows", None, swing_params)
+            if not isinstance(swings, pd.DataFrame):
+                raise TypeError("swing_highs_lows must resolve to a DataFrame")
+            return retracements(frame, swings, **params)
 
         raise ValueError(f"Unknown built-in indicator: {name!r}")
 
