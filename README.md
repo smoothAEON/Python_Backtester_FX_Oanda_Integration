@@ -1,88 +1,188 @@
-# Refactored Workspace
+# OANDA Backtester
 
-This workspace contains two connected Python tools:
+![Python](https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white)
+![OANDA](https://img.shields.io/badge/OANDA-v20%20API-1A1A2E?logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PGNpcmNsZSBjeD0iMTIiIGN5PSIxMiIgcj0iMTAiIGZpbGw9IiMwMEE2NUUiLz48L3N2Zz4=)
+![backtrader](https://img.shields.io/badge/backtrader-engine-blue)
+![pandas](https://img.shields.io/badge/pandas-data-150458?logo=pandas&logoColor=white)
+![TA-Lib](https://img.shields.io/badge/TA--Lib-indicators-orange)
+![scipy](https://img.shields.io/badge/scipy-math-8CAAE6?logo=scipy&logoColor=white)
+![matplotlib](https://img.shields.io/badge/matplotlib-charts-11557C)
+![License](https://img.shields.io/badge/license-private-lightgrey)
 
-- `oanda-candle-extractor/`: fetches and persists historical OANDA candles in the repo's canonical 14-column mid/bid/ask CSV format.
-- `backtester/`: consumes extractor-native CSV or DataFrame input and runs deterministic `backtrader` backtests, optimization sweeps, and report exports.
+A deterministic, bid/ask-aware backtesting system built on **backtrader** for OANDA forex and commodity instruments. Fetches historical candles via the OANDA v20 API, validates them against a strict 14-column schema, and runs strategy backtests with optimization, sizing, and reporting.
 
-The long-term goal is to build the backtester first, then reuse the same candle contract, strategy logic, sizing logic, and execution assumptions in a future OANDA trading bot.
+> **Long-term goal:** build the backtester first, then reuse its data model, strategy logic, and execution assumptions for a future live OANDA trading bot.
 
-## Current State
+## Features
 
-Implemented and verified:
+- **Bid/ask-aware execution** — buys fill on ask candles, sells fill on bid candles
+- **14-column candle contract** — strict validation for mid, bid, and ask OHLCV data
+- **Multi-timeframe support** — same-instrument higher-timeframe context feeds for signal and filter logic
+- **Indicator library** — TA-Lib wrappers (SMA, EMA, RSI, MACD, ATR, Bollinger, ADX), scipy helpers, and local SMC modules (BOS/CHOCH, order blocks, liquidity, premium/discount, ICT fib)
+- **Position sizing** — fixed-lot, risk-percent, Kelly criterion, and volatility-based sizing
+- **Optimization** — grid search, random search, and scipy-based optimization
+- **Reporting** — JSON, CSV, HTML reports with matplotlib charts
+- **Rate-limited extraction** — paced at 119 rps with gap-only date-range fetching and atomic CSV caching
 
-- Phase 1: backtrader foundation and data integration
-- Phase 2: strategy base and indicators
-- Phase 3: position sizing
-- Phase 4: performance analysis
-- Phase 5: optimization
-- Phase 6: reporting
-- Phase 7: extractor/backtester contract hardening
-- Phase 11: same-instrument multi-timeframe backtesting
-- Phase 12: master-owned instrument API for strategies
+## Project Structure
 
-Planned only:
-
-- Phase 9: universe candle fetching and instrument metadata hardening
-- Phase 10: runnable `strategies/` sample library
-
-Phase 8 documentation and repo audit are implemented in this pass.
-
-## Start Here
-
-Read these in order:
-
-1. [Repo Audit](plans/phase8_repo_audit.md)
-2. [Extractor README](oanda-candle-extractor/README.md)
-3. [Backtester README](backtester/README.md)
-4. [Project Checker](plans/project_checker.md)
-
-## Responsibilities
-
-Extractor:
-
-- talks to OANDA
-- normalizes instruments/timeframes
-- caches and persists historical candles
-- writes canonical CSVs under `oanda-candle-extractor\data\<INSTRUMENT>\`
-
-Backtester:
-
-- validates extractor-native candles
-- loads CSV/DataFrame input into `backtrader`
-- centralizes bid/ask-aware execution behavior
-- exposes strategy helpers, indicators, sizing, optimization, and reporting
-
-## Current Workflow
-
-What runs today:
-
-- fetch data with `python oanda-candle-extractor\extract_candles.py ...`
-- backtest with `run_backtest(...)` programmatically
-- export artifacts with `backtester.reporting`
-
-What is still planned:
-
-- public CLI examples that target `--strategy-module strategies.<module>`
-- a top-level `strategies/` package with runnable sample strategies
-
-The future `strategies.<module>` workflow is documented in [backtester/README.md](backtester/README.md), but it is explicitly Phase 10 work and is not runnable yet.
-
-## Quick Commands
-
-From the repo root:
-
-```powershell
-python -m pip install -r oanda-candle-extractor\requirements.txt
-python -m pip install -r backtester\requirements.txt
-python oanda-candle-extractor\extract_candles.py --help
-python -m backtester.run_backtest --help
-python -m pytest tests\extractor -q
-python -m pytest tests\backtester -q
+```text
+oanda-candle-extractor/     # Fetches and persists OANDA candles
+backtester/                 # backtrader-based backtesting engine
+  core/                     #   Cerebro builder, broker, result normalization
+  data/                     #   Schema validation, CSV/DataFrame loader, feed
+  strategy/                 #   BaseStrategy, signal helpers, instrument API
+  indicators/               #   TA-Lib, scipy, and SMC indicator wrappers
+  sizing/                   #   Pluggable position sizing modules
+  performance/              #   Metrics, analysis, and run comparison
+  optimization/             #   Grid, random, and scipy optimizers
+  reporting/                #   JSON, CSV, HTML, and chart exporters
+tests/                      # pytest suites for backtester and extractor
+plans/                      # Phase plans and progress tracker
 ```
 
-## Planning Docs
+## Quick Start
 
-- [Master Backtester Plan](plans/backtester_plan.md)
-- [Phase Breakdown](plans/backtester_phases/)
-- [Progress Tracker](plans/project_checker.md)
+### Install
+
+```bash
+python -m pip install -r backtester/requirements.txt
+python -m pip install -r oanda-candle-extractor/requirements.txt
+```
+
+### Fetch candles
+
+```bash
+python oanda-candle-extractor/extract_candles.py --instrument XAU_USD --timeframes 1h --count 500
+```
+
+Requires `OANDA_API_KEY` and `OANDA_ACCOUNT_ID` set in environment or in `oanda-candle-extractor/.env`.
+
+### Run a backtest
+
+```python
+import backtrader as bt
+from backtester.run_backtest import run_backtest
+
+
+class MyStrategy(bt.Strategy):
+    def next(self):
+        if not self.position:
+            self.buy(size=1)
+        elif len(self) >= 3 and self.position:
+            self.close()
+
+
+result = run_backtest(
+    MyStrategy,
+    instrument="EUR_USD",
+    timeframe="D",
+    csv_path="oanda-candle-extractor/data/EUR_USD/candles_EUR_USD_D.csv",
+)
+
+print(f"{result.strategy_name}: {result.end_value:.2f}")
+print(result.closed_trade_ledger[["status_name", "pnlcomm"]].tail())
+```
+
+### Run via CLI
+
+```bash
+python -m backtester.run_backtest \
+  --csv-path oanda-candle-extractor/data/XAU_USD/candles_XAU_USD_H1.csv \
+  --instrument XAU_USD \
+  --timeframe H1 \
+  --strategy-module strategies.my_strategy \
+  --strategy-class MyStrategy
+```
+
+### Run tests
+
+```bash
+python -m pytest tests/backtester -q    # 109 tests
+python -m pytest tests/extractor -q
+```
+
+## Multi-Timeframe
+
+Add same-instrument higher-timeframe context feeds for signal and filter logic:
+
+```python
+result = run_backtest(
+    MyStrategy,
+    instrument="EUR_USD",
+    timeframe="H1",
+    csv_path="oanda-candle-extractor/data/EUR_USD/candles_EUR_USD_H1.csv",
+    context_data={
+        "H4": "oanda-candle-extractor/data/EUR_USD/candles_EUR_USD_H4.csv",
+    },
+)
+```
+
+Orders always execute on the primary feed. Context feeds are read-only.
+
+## Optimization
+
+```python
+from backtester.optimization import ParameterSpec, run_grid_search
+
+result = run_grid_search(
+    MyStrategy,
+    instrument="EUR_USD",
+    timeframe="D",
+    csv_path="oanda-candle-extractor/data/EUR_USD/candles_EUR_USD_D.csv",
+    search_space=[
+        ParameterSpec("entry_bar", "int", grid_values=(1, 2, 3)),
+        ParameterSpec("exit_bar", "int", grid_values=(4, 5, 6)),
+    ],
+    objective="total_return",
+)
+
+print(result.ranking().head())
+```
+
+## Reporting
+
+```python
+from pathlib import Path
+from backtester.reporting import export_backtest_artifacts
+
+paths = export_backtest_artifacts(result, Path("artifacts"), run_label="my_run")
+# Outputs: summary.json, CSV ledgers, PNG charts, report.html
+```
+
+## Data Contract
+
+The backtester expects the extractor's canonical 14-column CSV:
+
+| Column | Description |
+| -------- | ----------- |
+| `time` | UTC timestamp |
+| `open`, `high`, `low`, `close` | Mid-price OHLC |
+| `bid_open`, `bid_high`, `bid_low`, `bid_close` | Bid-price OHLC |
+| `ask_open`, `ask_high`, `ask_low`, `ask_close` | Ask-price OHLC |
+| `volume` | Tick volume |
+
+CSV path convention: `oanda-candle-extractor/data/<INSTRUMENT>/candles_<INSTRUMENT>_<TIMEFRAME>.csv`
+
+## Roadmap
+
+| Phase | Name | Status |
+| ------- | ------ | -------- |
+| 1-8 | Foundation through documentation | Done |
+| 11 | Multi-timeframe backtesting | Done |
+| 12 | Master-owned instrument API | Done |
+| 9 | Universe candle fetching | Planned |
+| 10 | Strategy library and samples | Planned |
+| 13 | Repo consolidation and packaging | Planned |
+
+See [plans/](plans/) for detailed phase docs and [plans/project_checker.md](plans/project_checker.md) for the progress tracker.
+
+## Documentation
+
+| Document | Purpose |
+| ---------- | --------- |
+| [Backtester README](backtester/README.md) | Usage, examples, instrument API, and roadmap |
+| [Extractor README](oanda-candle-extractor/README.md) | Extraction usage, rate limiting, and configuration |
+| [Master Plan](plans/backtester_plan.md) | Architecture and dependency plan |
+| [Phase Breakdown](plans/backtester_phases/) | Detailed phase specifications |
+| [Repo Audit](plans/phase8_repo_audit.md) | Phase 8 verification baseline |
