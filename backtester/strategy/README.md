@@ -15,6 +15,10 @@
 
 Subclass `BaseStrategy` when you want one-thesis order helpers, price-bar accessors, built-in indicator access, and optional higher-timeframe context feeds. Use the pure signal helpers when you want deterministic checks without touching broker state.
 
+Inside `run_backtest()`, strategy-visible feed time uses completed-bar semantics. Higher-timeframe context only unlocks after that bar has closed.
+
+`instrument_api` is intentionally narrower than `backtester.indicators`: it exposes the runtime-safe indicator subset and rejects repainting helpers such as `savgol_smooth`, `swing_highs_lows`, `bos_choch`, `ob`, `liquidity`, `premium_discount`, `retracements`, and `ICTFibEngine`.
+
 ## Example
 
 ```python

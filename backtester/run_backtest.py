@@ -64,6 +64,7 @@ def run_backtest(
         normalized = loader.load_csv(csv_path)
     else:
         normalized = loader.load_dataframe(dataframe)
+    normalized = _normalize_backtest_frame(normalized, timeframe=primary_timeframe)
 
     feeds = [
         _build_data_feed(
@@ -75,6 +76,7 @@ def run_backtest(
     ordered_timeframes = [primary_timeframe]
     for context_timeframe, source in ordered_context_sources:
         context_frame = _load_source_dataframe(loader, source)
+        context_frame = _normalize_backtest_frame(context_frame, timeframe=context_timeframe)
         feeds.append(
             _build_data_feed(
                 context_frame,
@@ -227,6 +229,23 @@ def _normalize_context_data(
         normalized[timeframe] = source
 
     return sorted(normalized.items(), key=lambda item: _TIMEFRAME_SECONDS[item[0]])
+
+
+def _normalize_backtest_frame(
+    dataframe: pd.DataFrame,
+    *,
+    timeframe: str,
+) -> pd.DataFrame:
+    """Convert extractor-native bar-start timestamps into completed-bar feed times."""
+
+    normalized = dataframe.copy()
+    bar_start = pd.to_datetime(normalized["time"], utc=True)
+    bar_end = bar_start + pd.Timedelta(seconds=_TIMEFRAME_SECONDS[timeframe])
+    normalized["bar_start_time"] = bar_start
+    normalized["bar_end_time"] = bar_end
+    normalized["time"] = bar_end
+    normalized.index = pd.DatetimeIndex(bar_end, name="time")
+    return normalized
 
 
 if __name__ == "__main__":

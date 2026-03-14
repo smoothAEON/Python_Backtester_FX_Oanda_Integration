@@ -12,7 +12,9 @@
 
 ## How To Use It
 
-Use these helpers directly on pandas Series/DataFrames or through `BaseStrategy.instrument_api`. The direct wrappers are useful for research notebooks, offline analysis, and deterministic unit tests.
+Use these helpers directly on pandas Series/DataFrames. The direct wrappers are useful for research notebooks, offline analysis, and deterministic unit tests.
+
+`BaseStrategy.instrument_api` exposes only the runtime-safe subset. `savgol_smooth`, `swing_highs_lows`, `bos_choch`, `ob`, `liquidity`, `premium_discount`, `retracements`, and `ICTFibEngine` remain importable here for offline research, but are rejected from `instrument_api` because they repaint or depend on future confirmation. `previous_high_low` and `sessions` remain available through `instrument_api` after the runner normalizes feed time to completed bars.
 
 ## Example
 

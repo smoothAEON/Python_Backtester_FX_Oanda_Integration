@@ -69,19 +69,10 @@ class InstrumentApiObservationStrategy(BaseStrategy):
         self._runtime_ids.append(id(self.instrument_api))
         primary_ema = self.instrument_api.indicator("H1", "ema", period=2)
         context_slope = self.instrument_api.indicator("H4", "rolling_linreg_slope", window=2)
-        context_swings = self.instrument_api.indicator("H4", "swing_highs_lows", swing_length=1)
-        context_zones = self.instrument_api.indicator("H4", "premium_discount", swing_length=1)
-        context_fib = self.instrument_api.indicator(
-            "H4",
-            "ict_fib",
-            swing_length=1,
-            atr_period=2,
-        )
         snapshot = self.indicator_snapshot(
             "H4",
             [
                 IndicatorRequest("rolling_linreg_slope", params={"window": 2}, alias="htf_slope"),
-                IndicatorRequest("swing_highs_lows", params={"swing_length": 1}, alias="swings"),
             ],
         )
         self._htf_slope_values.append(float(snapshot["htf_slope"]))
@@ -90,9 +81,6 @@ class InstrumentApiObservationStrategy(BaseStrategy):
             "available_timeframes": self.instrument_api.available_timeframes(),
             "primary_ema_type": type(primary_ema).__name__,
             "context_slope_type": type(context_slope).__name__,
-            "context_swing_columns": list(context_swings.columns),
-            "context_zone_columns": list(context_zones.columns),
-            "context_fib_type": type(context_fib).__name__ if context_fib is not None else "NoneType",
             "context_ohlcv_rows": len(self.instrument_api.ohlcv("H4")),
             "context_price_close": self.instrument_api.price_bar("H4", side="mid").close,
         }
@@ -136,7 +124,17 @@ class InstrumentApiErrorStrategy(BaseStrategy):
             "unknown_timeframe": lambda: self.instrument_api.ohlcv("D"),
             "unknown_indicator": lambda: self.instrument_api.indicator("H1", "not_a_real_indicator"),
             "invalid_param": lambda: self.instrument_api.indicator("H1", "ema", period=0),
-            "missing_ict_fib_swing_length": lambda: self.instrument_api.indicator("H1", "ict_fib"),
+            "unsafe_savgol": lambda: self.instrument_api.indicator(
+                "H1",
+                "savgol_smooth",
+                window_length=5,
+                polyorder=2,
+            ),
+            "unsafe_indicator": lambda: self.instrument_api.indicator("H1", "ict_fib"),
+            "unsafe_snapshot": lambda: self.indicator_snapshot(
+                "H1",
+                [IndicatorRequest("swing_highs_lows", params={"swing_length": 1})],
+            ),
             "unsupported_source": lambda: self.instrument_api.indicator(
                 "H1",
                 "atr",
@@ -153,6 +151,30 @@ class InstrumentApiErrorStrategy(BaseStrategy):
 
     def stop(self):
         type(self).errors = dict(self._errors)
+
+
+class InstrumentApiTimeAlignedIndicatorsStrategy(BaseStrategy):
+    previous_high_first_bar: int | None = None
+    tokyo_active_flags: list[int] = []
+
+    def __init__(self):
+        super().__init__()
+        self._previous_high_first_bar: int | None = None
+        self._tokyo_active_flags: list[int] = []
+
+    def next(self):
+        previous = self.instrument_api.indicator("H1", "previous_high_low", time_frame="1D")
+        tokyo = self.instrument_api.indicator("H1", "sessions", session="Tokyo")
+
+        previous_high = previous["PreviousHigh"].iloc[-1]
+        if self._previous_high_first_bar is None and not pd.isna(previous_high):
+            self._previous_high_first_bar = len(self)
+
+        self._tokyo_active_flags.append(int(tokyo["Active"].iloc[-1]))
+
+    def stop(self):
+        type(self).previous_high_first_bar = self._previous_high_first_bar
+        type(self).tokyo_active_flags = list(self._tokyo_active_flags)
 
 
 class InstrumentApiSignalStrategy(BaseStrategy):
@@ -186,7 +208,7 @@ def test_instrument_api_exposes_master_runtime_and_built_ins(make_oanda_frame):
 
     primary = _frame_for_hours(
         make_oanda_frame,
-        [10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0],
+        [10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0, 20.0, 21.0],
         start="2024-01-01T00:00:00Z",
     )
     context = _frame_for_four_hours(
@@ -207,16 +229,9 @@ def test_instrument_api_exposes_master_runtime_and_built_ins(make_oanda_frame):
     assert InstrumentApiObservationStrategy.summary["available_timeframes"] == ("H1", "H4")
     assert InstrumentApiObservationStrategy.summary["primary_ema_type"] == "Series"
     assert InstrumentApiObservationStrategy.summary["context_slope_type"] == "Series"
-    assert InstrumentApiObservationStrategy.summary["context_swing_columns"] == ["HighLow", "Level"]
-    assert InstrumentApiObservationStrategy.summary["context_zone_columns"] == [
-        "RangeHigh",
-        "RangeLow",
-        "Equilibrium",
-        "Zone",
-    ]
     assert InstrumentApiObservationStrategy.summary["context_ohlcv_rows"] == 3
     assert InstrumentApiObservationStrategy.summary["context_price_close"] == 260.0
-    expected_slopes = [float("nan")] * 4 + [50.0] * 4 + [110.0] * 2
+    expected_slopes = [float("nan")] * 4 + [50.0] * 4 + [110.0]
     assert len(InstrumentApiObservationStrategy.htf_slope_values) == len(expected_slopes)
     for actual, expected in zip(
         InstrumentApiObservationStrategy.htf_slope_values,
@@ -228,10 +243,7 @@ def test_instrument_api_exposes_master_runtime_and_built_ins(make_oanda_frame):
         else:
             assert actual == pytest.approx(expected)
     assert "htf_slope" in InstrumentApiObservationStrategy.snapshots[-1]
-    assert set(InstrumentApiObservationStrategy.snapshots[-1]["swings"]) == {
-        "HighLow",
-        "Level",
-    }
+    assert InstrumentApiObservationStrategy.snapshots[-1]["htf_slope"] == pytest.approx(110.0)
 
 
 def test_instrument_api_memoizes_repeated_same_bar_indicator_requests(
@@ -297,10 +309,30 @@ def test_instrument_api_rejects_invalid_requests_cleanly(make_oanda_frame):
     assert "Available timeframes: H1, H4" in InstrumentApiErrorStrategy.errors["unknown_timeframe"]
     assert "Unknown built-in indicator" in InstrumentApiErrorStrategy.errors["unknown_indicator"]
     assert "period must be positive" in InstrumentApiErrorStrategy.errors["invalid_param"]
-    assert "ict_fib requires explicit swing_length" in InstrumentApiErrorStrategy.errors[
-        "missing_ict_fib_swing_length"
-    ]
+    assert "unsafe/repainting" in InstrumentApiErrorStrategy.errors["unsafe_savgol"]
+    assert "unsafe/repainting" in InstrumentApiErrorStrategy.errors["unsafe_indicator"]
+    assert "offline research only" in InstrumentApiErrorStrategy.errors["unsafe_snapshot"]
     assert "does not accept a source parameter" in InstrumentApiErrorStrategy.errors["unsupported_source"]
+
+
+def test_instrument_api_keeps_time_aware_indicators_on_completed_bar_time(make_oanda_frame):
+    InstrumentApiTimeAlignedIndicatorsStrategy.previous_high_first_bar = None
+    InstrumentApiTimeAlignedIndicatorsStrategy.tokyo_active_flags = []
+    primary = _frame_for_hours(
+        make_oanda_frame,
+        [float(value) for value in range(30)],
+        start="2024-01-01T00:00:00Z",
+    )
+
+    run_backtest(
+        InstrumentApiTimeAlignedIndicatorsStrategy,
+        instrument="XAU_USD",
+        timeframe="H1",
+        dataframe=primary,
+    )
+
+    assert InstrumentApiTimeAlignedIndicatorsStrategy.previous_high_first_bar == 25
+    assert InstrumentApiTimeAlignedIndicatorsStrategy.tokyo_active_flags[:10] == [1] * 9 + [0]
 
 
 def test_instrument_api_strategy_flows_through_reporting_and_optimization(make_oanda_frame):

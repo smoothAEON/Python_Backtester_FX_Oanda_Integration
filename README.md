@@ -9,20 +9,20 @@
 ![matplotlib](https://img.shields.io/badge/matplotlib-charts-11557C)
 ![License](https://img.shields.io/badge/license-private-lightgrey)
 
-A deterministic, bid/ask-aware backtesting system built on **backtrader** for OANDA forex and commodity instruments. Fetches historical candles via the OANDA v20 API, validates them against a strict 14-column schema, and runs strategy backtests with optimization, sizing, and reporting.
+A deterministic, bid/ask-aware backtesting system built on **backtrader** for OANDA forex and commodity instruments. Fetch historical candles via the OANDA v20 API, validate them against a strict 14-column schema, and run strategy backtests with optimization, sizing, and reporting.
 
 > **Long-term goal:** build the backtester first, then reuse its data model, strategy logic, and execution assumptions for a future live OANDA trading bot.
 
 ## Features
 
-- **Bid/ask-aware execution** — buys fill on ask candles, sells fill on bid candles
-- **14-column candle contract** — strict validation for mid, bid, and ask OHLCV data
-- **Multi-timeframe support** — same-instrument higher-timeframe context feeds for signal and filter logic
-- **Indicator library** — TA-Lib wrappers (SMA, EMA, RSI, MACD, ATR, Bollinger, ADX), scipy helpers, and local SMC modules (BOS/CHOCH, order blocks, liquidity, premium/discount, ICT fib)
-- **Position sizing** — fixed-lot, risk-percent, Kelly criterion, and volatility-based sizing
-- **Optimization** — grid search, random search, and scipy-based optimization
-- **Reporting** — JSON, CSV, HTML reports with matplotlib charts
-- **Rate-limited extraction** — single-instrument and fixed-universe batch CLIs with gap-only date-range fetching, transient retry hardening, and atomic CSV caching
+- **Bid/ask-aware execution**: buys fill on ask candles, sells fill on bid candles.
+- **14-column candle contract**: strict validation for mid, bid, and ask OHLCV data.
+- **Multi-timeframe support**: same-instrument higher-timeframe context feeds for signal and filter logic.
+- **Indicator library**: TA-Lib wrappers, scipy helpers, and SMC/research helpers; `instrument_api` only exposes the causal/time-safe subset during backtests.
+- **Position sizing**: fixed-lot, risk-percent, Kelly criterion, and volatility-based sizing.
+- **Optimization**: grid search, random search, and scipy-based optimization.
+- **Reporting**: JSON, CSV, HTML reports with matplotlib charts.
+- **Rate-limited extraction**: single-instrument and fixed-universe batch CLIs with gap-only date-range fetching, transient retry hardening, and atomic CSV caching.
 
 ## Project Structure
 
@@ -58,7 +58,7 @@ python oanda-candle-extractor/extract_candles.py --instrument XAU_USD --timefram
 python oanda-candle-extractor/fetch_universe.py
 ```
 
-Requires `OANDA_API_KEY` and `OANDA_ACCOUNT_ID` set in environment or in `oanda-candle-extractor/.env`.
+Requires `OANDA_API_KEY` and `OANDA_ACCOUNT_ID` in the environment or in `oanda-candle-extractor/.env`.
 
 ### Run a backtest
 
@@ -74,7 +74,7 @@ result = run_backtest(
 )
 
 print(f"{result.strategy_name}: {result.end_value:.2f}")
-print(result.closed_trade_ledger[["status_name", "pnlcomm"]].tail())
+print(result.closed_trade_ledger[["direction", "net_pnl"]].tail())
 ```
 
 ### Run via CLI
@@ -91,7 +91,7 @@ python -m backtester.run_backtest \
 ### Run tests
 
 ```bash
-python -m pytest tests/backtester -q    # 136 tests
+python -m pytest tests/backtester -q    # 145 tests
 python -m pytest tests/extractor -q
 ```
 
@@ -111,7 +111,7 @@ result = run_backtest(
 )
 ```
 
-Orders always execute on the primary feed. Context feeds are read-only.
+Orders always execute on the primary feed. Context feeds are read-only, and higher-timeframe rows only become visible after their completed bar time inside `run_backtest()`.
 
 ## Optimization
 
@@ -148,8 +148,8 @@ paths = export_backtest_artifacts(result, Path("artifacts"), run_label="my_run")
 The backtester expects the extractor's canonical 14-column CSV:
 
 | Column | Description |
-| -------- | ----------- |
-| `time` | UTC timestamp |
+| ------ | ----------- |
+| `time` | Raw extractor/OANDA UTC bar-start timestamp |
 | `open`, `high`, `low`, `close` | Mid-price OHLC |
 | `bid_open`, `bid_high`, `bid_low`, `bid_close` | Bid-price OHLC |
 | `ask_open`, `ask_high`, `ask_low`, `ask_close` | Ask-price OHLC |
@@ -157,10 +157,12 @@ The backtester expects the extractor's canonical 14-column CSV:
 
 CSV path convention: `oanda-candle-extractor/data/<INSTRUMENT>/candles_<INSTRUMENT>_<TIMEFRAME>.csv`
 
+`run_backtest()` keeps extractor files unchanged and normalizes these raw bar-start timestamps to completed-bar time internally before building feeds, so backtest ledgers, higher-timeframe visibility, and equity curves are timestamped at bar completion.
+
 ## Roadmap
 
 | Phase | Name | Status |
-| ------- | ------ | -------- |
+| ----- | ---- | ------ |
 | 1-8 | Foundation through documentation | Done |
 | 9 | Universe candle fetching | Done |
 | 11 | Multi-timeframe backtesting | Done |
@@ -173,7 +175,7 @@ See [plans/](plans/) for detailed phase docs and [plans/project_checker.md](plan
 ## Documentation
 
 | Document | Purpose |
-| ---------- | --------- |
+| -------- | ------- |
 | [Backtester README](backtester/README.md) | Workflow guide, CLI flags, config notes, and component links |
 | [Backtester API Index](backtester/API_INDEX.md) | Public class/function import paths |
 | [Extractor README](oanda-candle-extractor/README.md) | Extraction usage, rate limiting, and configuration |

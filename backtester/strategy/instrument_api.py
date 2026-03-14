@@ -13,7 +13,6 @@ import pandas as pd
 from backtester.indicators.scipy_indicators import (
     rolling_linreg_slope,
     rolling_zscore,
-    savgol_smooth,
 )
 from backtester.indicators.talib_indicators import adx, atr, bollinger_bands, ema, macd, rsi, sma
 
@@ -75,13 +74,24 @@ class InstrumentRuntime:
     """
 
     _PRICE_SOURCE_COLUMNS = {"open", "high", "low", "close", "volume"}
+    _UNSAFE_INDICATORS = frozenset(
+        {
+            "savgol_smooth",
+            "swing_highs_lows",
+            "bos_choch",
+            "ob",
+            "liquidity",
+            "premium_discount",
+            "retracements",
+            "ict_fib",
+        }
+    )
     _PRICE_INDICATORS = {
         "sma": sma,
         "ema": ema,
         "rsi": rsi,
         "macd": macd,
         "bollinger_bands": bollinger_bands,
-        "savgol_smooth": savgol_smooth,
         "rolling_linreg_slope": rolling_linreg_slope,
         "rolling_zscore": rolling_zscore,
     }
@@ -203,6 +213,12 @@ class InstrumentRuntime:
         normalized_name = str(name).strip().lower()
         if not normalized_name:
             raise ValueError("indicator name must be a non-empty string")
+        if normalized_name in self._UNSAFE_INDICATORS:
+            raise ValueError(
+                f"{normalized_name} is unavailable through instrument_api because it is "
+                "unsafe/repainting in live-like backtests; use backtester.indicators "
+                "directly for offline research only"
+            )
 
         normalized_source = None
         if source is not None:

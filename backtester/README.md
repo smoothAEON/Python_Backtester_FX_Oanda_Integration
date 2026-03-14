@@ -1,6 +1,6 @@
 # Backtester
 
-`backtester/` is the repo's `backtrader`-based execution, analysis, optimization, and reporting package. It consumes extractor-native CSV or DataFrame input and keeps execution assumptions centralized and deterministic.
+`backtester/` is the repo's `backtrader`-based execution, analysis, optimization, and reporting package. It consumes extractor-native CSV or DataFrame input, normalizes extractor bar-start timestamps to completed-bar feed times during runs, and keeps execution assumptions centralized and deterministic.
 
 If you are starting from the repo root, read [../README.md](../README.md) first. For the data-fetch side, use [../oanda-candle-extractor/README.md](../oanda-candle-extractor/README.md).
 
@@ -65,6 +65,8 @@ That file already matches the required 14-column schema:
 
 Validation stays strict by design: UTC timestamps only, duplicate timestamps fail by default, bid must not cross ask, and OHLC relationships must remain internally valid.
 
+Extractor-native `time` stays as the raw OANDA bar-start timestamp on disk and in `OANDADataLoader`. `run_backtest()` converts that timestamp to completed-bar time internally before building feeds, so strategy-visible time, higher-timeframe visibility, and result ledgers all use bar-end semantics.
+
 ## Quickstart
 
 Programmatic run:
@@ -101,6 +103,8 @@ Useful result surfaces:
 - `result.timeframe`
 - `result.timeframes`
 - `result.execution_policy`
+
+Feed-derived timestamps in `result.order_ledger`, `result.trade_ledger`, `result.closed_trade_ledger`, and `result.equity_curve` reflect completed-bar time, not the raw extractor bar-start timestamp.
 
 ## CLI Usage
 
@@ -194,7 +198,10 @@ Key rules:
 
 - orders execute only on the primary feed
 - context feeds are read-only and must be strictly higher timeframes
+- higher-timeframe rows become visible only after that higher-timeframe bar has completed
 - the CLI does not expose `context_data`
+
+`BaseStrategy.instrument_api` only exposes the runtime-safe indicator subset. Repainting helpers such as `savgol_smooth`, `swing_highs_lows`, `bos_choch`, `ob`, `liquidity`, `premium_discount`, `retracements`, and `ICTFibEngine` remain importable from `backtester.indicators` for offline research, but are rejected through `instrument_api`.
 
 ## Examples Package
 

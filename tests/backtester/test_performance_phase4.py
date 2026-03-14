@@ -218,8 +218,8 @@ def test_result_adds_closed_trade_ledger_without_changing_raw_trade_ledger(make_
     exit_fill = completed_orders[~completed_orders["is_buy"]].iloc[0]
     assert closed_trade["entry_order_ref"] == entry_fill["ref"]
     assert closed_trade["exit_order_ref"] == exit_fill["ref"]
-    assert closed_trade["entry_time"] == pd.Timestamp("2024-01-01T01:00:00Z")
-    assert closed_trade["exit_time"] == pd.Timestamp("2024-01-01T02:00:00Z")
+    assert closed_trade["entry_time"] == pd.Timestamp("2024-01-01T02:00:00Z")
+    assert closed_trade["exit_time"] == pd.Timestamp("2024-01-01T03:00:00Z")
     assert closed_trade["direction"] == "long"
     assert closed_trade["entry_price"] == pytest.approx(101.1)
     assert closed_trade["exit_price"] == pytest.approx(100.6)

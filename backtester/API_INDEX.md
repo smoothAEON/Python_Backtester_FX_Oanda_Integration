@@ -4,6 +4,8 @@ This index maps the current public backtester surfaces to their module paths.
 
 ## Root Package
 
+`run_backtest()` keeps extractor-native inputs unchanged on disk, but normalizes feed and result timestamps to completed-bar time during a run.
+
 | Symbol | Import Path |
 | ------ | ----------- |
 | `BaseStrategy` | `backtester.BaseStrategy` |
@@ -62,6 +64,8 @@ Relevant current fields: `ExecutionConfig.leverage` controls leveraged notional-
 | `smc_bearish_confluence` | `backtester.strategy.smc_bearish_confluence` |
 
 ## Indicators
+
+Direct indicator exports are broader than the strategy runtime surface. Repainting helpers remain importable from `backtester.indicators` for offline analysis, but are not available through `BaseStrategy.instrument_api`.
 
 | Symbol | Import Path |
 | ------ | ----------- |

@@ -58,6 +58,7 @@ class CaptureMultiTimeframeStrategy(BaseStrategy):
         super().__init__()
         self._observations: list[dict] = []
         self._entry_timeframe: str | None = None
+        self._entry_bar: int | None = None
 
     def next(self):
         if not self.has_all_timeframes_ready():
@@ -67,6 +68,7 @@ class CaptureMultiTimeframeStrategy(BaseStrategy):
         self._observations.append(
             {
                 "primary_len": len(self.data0),
+                "primary_time": pd.Timestamp(self.data0.datetime.datetime(0), tz="UTC"),
                 "context_len": len(self.data_for_timeframe("H4")),
                 "primary_close": self.mid.close,
                 "context_close": self.mid_for("H4").close,
@@ -74,10 +76,15 @@ class CaptureMultiTimeframeStrategy(BaseStrategy):
             }
         )
 
-        if len(self.data0) == 1 and self.is_flat():
+        if self._entry_bar is None and self.is_flat():
             entry_order = self.submit_long_market(size=1)
             self._entry_timeframe = getattr(entry_order.data, "_phase_timeframe", None)
-        elif len(self.data0) == int(self.p.hold_bars) and self.position:
+            self._entry_bar = len(self.data0)
+        elif (
+            self._entry_bar is not None
+            and self.position
+            and len(self.data0) - self._entry_bar >= int(self.p.hold_bars)
+        ):
             self.close(data=self.data0)
 
     def stop(self):
@@ -95,7 +102,7 @@ def test_run_backtest_supports_same_instrument_multi_timeframe_context(make_oand
     CaptureMultiTimeframeStrategy.summary = {}
     primary = _frame_for_hours(
         make_oanda_frame,
-        [10.0, 11.0, 12.0, 13.0, 14.0, 15.0],
+        [10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0],
         start="2024-01-01T00:00:00Z",
     )
     context = _frame_for_four_hours(
@@ -116,14 +123,20 @@ def test_run_backtest_supports_same_instrument_multi_timeframe_context(make_oand
     assert result.timeframes == ("H1", "H4")
     assert CaptureMultiTimeframeStrategy.summary["available_timeframes"] == ("H1", "H4")
     assert CaptureMultiTimeframeStrategy.summary["entry_timeframe"] == "H1"
-    assert CaptureMultiTimeframeStrategy.summary["primary_rows"] == 6
+    assert CaptureMultiTimeframeStrategy.summary["primary_rows"] == 8
     assert CaptureMultiTimeframeStrategy.summary["context_rows"] == 2
+    assert [row["primary_time"] for row in CaptureMultiTimeframeStrategy.observations] == [
+        pd.Timestamp("2024-01-01T04:00:00Z"),
+        pd.Timestamp("2024-01-01T05:00:00Z"),
+        pd.Timestamp("2024-01-01T06:00:00Z"),
+        pd.Timestamp("2024-01-01T07:00:00Z"),
+        pd.Timestamp("2024-01-01T08:00:00Z"),
+    ]
     assert [row["context_close"] for row in CaptureMultiTimeframeStrategy.observations] == [
         100.0,
         100.0,
         100.0,
         100.0,
-        200.0,
         200.0,
     ]
     assert [row["context_rows"] for row in CaptureMultiTimeframeStrategy.observations] == [
@@ -131,7 +144,6 @@ def test_run_backtest_supports_same_instrument_multi_timeframe_context(make_oand
         1,
         1,
         1,
-        2,
         2,
     ]
     assert not result.order_ledger.empty

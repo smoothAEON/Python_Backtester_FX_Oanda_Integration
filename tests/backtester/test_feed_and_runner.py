@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import backtrader as bt
+import pandas as pd
 import pytest
 
 from backtester.data.oanda_feed import OANDABidAskData
@@ -32,6 +33,11 @@ class SmokeStrategy(bt.Strategy):
             self.buy(size=1)
         elif len(self) == 2 and self.position:
             self.sell(size=1)
+
+
+class HoldFlatStrategy(bt.Strategy):
+    def next(self):
+        return
 
 
 def test_oanda_feed_exposes_bid_and_ask_lines(make_oanda_frame):
@@ -102,3 +108,37 @@ def test_run_backtest_returns_populated_result(make_oanda_frame):
     assert result.execution_policy["margin_model"] == "notional_margin"
     assert result.execution_policy["leverage"] == pytest.approx(30.0)
     assert result.execution_policy["point_value"] == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize(
+    ("timeframe", "delta"),
+    [
+        ("H1", pd.Timedelta(hours=1)),
+        ("H4", pd.Timedelta(hours=4)),
+        ("D", pd.Timedelta(days=1)),
+    ],
+)
+def test_run_backtest_normalizes_feed_times_to_completed_bars(
+    make_oanda_frame,
+    timeframe: str,
+    delta: pd.Timedelta,
+):
+    raw_times = [
+        pd.Timestamp("2024-01-01T00:00:00Z"),
+        pd.Timestamp("2024-01-01T00:00:00Z") + delta,
+    ]
+    frame = make_oanda_frame(
+        [
+            {"time": raw_times[0], "open": 100.0, "high": 101.0, "low": 99.0, "close": 100.5},
+            {"time": raw_times[1], "open": 101.0, "high": 102.0, "low": 100.0, "close": 101.5},
+        ]
+    )
+
+    result = run_backtest(
+        HoldFlatStrategy,
+        instrument="XAU_USD",
+        timeframe=timeframe,
+        dataframe=frame,
+    )
+
+    assert list(result.equity_curve["time"]) == [raw_times[0] + delta, raw_times[1] + delta]
