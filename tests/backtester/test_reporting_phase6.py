@@ -318,6 +318,8 @@ def _build_optimization_result() -> OptimizationResult:
             error=None,
             result=None,
             cache_hit=False,
+            objective_score_source="out_of_sample",
+            search_objective_score=1.5,
         ),
         OptimizationTrial(
             run_id=2,
@@ -347,6 +349,8 @@ def _build_optimization_result() -> OptimizationResult:
             error=None,
             result=None,
             cache_hit=False,
+            objective_score_source="out_of_sample",
+            search_objective_score=1.0,
         ),
         OptimizationTrial(
             run_id=3,
@@ -365,6 +369,8 @@ def _build_optimization_result() -> OptimizationResult:
             error="constraint_rejected",
             result=None,
             cache_hit=False,
+            objective_score_source="out_of_sample",
+            search_objective_score=0.8,
         ),
         OptimizationTrial(
             run_id=4,
@@ -383,6 +389,8 @@ def _build_optimization_result() -> OptimizationResult:
             error="RuntimeError: explosion",
             result=None,
             cache_hit=False,
+            objective_score_source="out_of_sample",
+            search_objective_score=None,
         ),
     ]
 
@@ -417,7 +425,11 @@ def _build_optimization_result() -> OptimizationResult:
             "target_evaluations": None,
             "stopped_early": False,
             "stop_reason": None,
+            "ranking_available": True,
+            "ranking_score_source": "out_of_sample",
+            "evaluation_mode": "explicit_evaluation",
         },
+        ranking_score_source="out_of_sample",
     )
 
 

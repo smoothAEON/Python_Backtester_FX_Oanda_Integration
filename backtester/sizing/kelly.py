@@ -115,9 +115,32 @@ class KellySizer(BaseSizer):
             )
 
         risk_amount = equity * effective_risk_percent
-        per_unit_risk = self._per_unit_risk(stop_distance, spec)
+        try:
+            per_unit_risk, quote_to_account_rate = self._per_unit_risk(
+                stop_distance,
+                instrument=instrument,
+                entry_price=entry_price,
+                spec=spec,
+                metadata=normalized_metadata,
+            )
+        except (TypeError, ValueError) as exc:
+            return self._reject(
+                method=self.method,
+                instrument=instrument,
+                side=side,
+                equity=equity,
+                entry_price=entry_price,
+                stop_price=stop_price,
+                stop_distance=stop_distance,
+                raw_size=0.0,
+                spec=spec,
+                reason="missing_quote_conversion",
+                details={**details, "quote_conversion_error": str(exc)},
+            )
+
         details["risk_amount"] = risk_amount
         details["per_unit_risk"] = per_unit_risk
+        details["quote_to_account_rate"] = quote_to_account_rate
         raw_size = risk_amount / per_unit_risk
         return self._accept_or_reject_size(
             method=self.method,

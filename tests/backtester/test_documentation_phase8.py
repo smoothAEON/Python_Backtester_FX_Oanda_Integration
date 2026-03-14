@@ -4,9 +4,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-from backtester.examples import InstrumentApiStrategy, QuickstartStrategy, WindowStrategy
-from backtester.optimization import ParameterSpec, run_grid_search
 from backtester.run_backtest import run_backtest
+from strategies import EmaRsiTrendStrategy
+from backtester.examples import InstrumentApiStrategy, QuickstartStrategy, WindowStrategy
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -25,6 +25,7 @@ DOCUMENTATION_PATHS = [
     ROOT / "backtester" / "optimization" / "README.md",
     ROOT / "backtester" / "reporting" / "README.md",
     ROOT / "backtester" / "examples" / "README.md",
+    ROOT / "strategies" / "README.md",
 ]
 
 
@@ -33,20 +34,20 @@ def test_backtester_component_docs_exist():
         assert path.exists(), f"Missing documentation file: {path}"
 
 
-def test_quickstart_example_runs_with_checked_in_csv():
+def test_canonical_strategy_library_example_runs_with_checked_in_csv():
     result = run_backtest(
-        QuickstartStrategy,
+        EmaRsiTrendStrategy,
         instrument="EUR_USD",
         timeframe="D",
         csv_path=str(REAL_EXTRACTOR_CSV),
     )
 
-    assert result.strategy_name == "QuickstartStrategy"
+    assert result.strategy_name == "EmaRsiTrendStrategy"
     assert result.instrument == "EUR_USD"
     assert result.timeframe == "D"
     assert result.timeframes == ("D",)
     assert not result.order_ledger.empty
-    assert not result.trade_ledger.empty
+    assert not result.closed_trade_ledger.empty
 
 
 def test_instrument_api_example_runs_with_checked_in_csv():
@@ -67,23 +68,10 @@ def test_instrument_api_example_runs_with_checked_in_csv():
     assert InstrumentApiStrategy.latest_bar_close is not None
 
 
-def test_window_example_runs_through_optimization_with_checked_in_csv():
-    optimization = run_grid_search(
-        WindowStrategy,
-        instrument="EUR_USD",
-        timeframe="D",
-        csv_path=str(REAL_EXTRACTOR_CSV),
-        search_space=[
-            ParameterSpec("entry_bar", "int", grid_values=(2,)),
-            ParameterSpec("exit_bar", "int", grid_values=(5,)),
-        ],
-        objective="total_return",
-    )
-
-    ranking = optimization.ranking()
-    assert len(ranking) == 1
-    assert ranking.iloc[0]["strategy_name"] == "WindowStrategy"
-    assert optimization.best_trial().timeframe == "D"
+def test_examples_package_remains_importable_for_secondary_docs():
+    assert QuickstartStrategy.__name__ == "QuickstartStrategy"
+    assert WindowStrategy.__name__ == "WindowStrategy"
+    assert InstrumentApiStrategy.__name__ == "InstrumentApiStrategy"
 
 
 def test_run_backtest_help_cli_succeeds():
@@ -101,7 +89,7 @@ def test_run_backtest_help_cli_succeeds():
     assert "--strategy-param" in completed.stdout
 
 
-def test_documented_cli_example_runs_against_examples_package():
+def test_documented_cli_example_runs_against_strategy_library():
     completed = subprocess.run(
         [
             sys.executable,
@@ -114,9 +102,9 @@ def test_documented_cli_example_runs_against_examples_package():
             "--timeframe",
             "D",
             "--strategy-module",
-            "backtester.examples",
+            "strategies.ema_rsi_trend",
             "--strategy-class",
-            "QuickstartStrategy",
+            "EmaRsiTrendStrategy",
         ],
         cwd=ROOT,
         capture_output=True,
@@ -125,6 +113,6 @@ def test_documented_cli_example_runs_against_examples_package():
     )
 
     assert completed.returncode == 0, completed.stderr or completed.stdout
-    assert "strategy=QuickstartStrategy" in completed.stdout
+    assert "strategy=EmaRsiTrendStrategy" in completed.stdout
     assert "instrument=EUR_USD" in completed.stdout
     assert "timeframe=D" in completed.stdout

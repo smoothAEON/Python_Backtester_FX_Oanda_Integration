@@ -126,13 +126,36 @@ class VolatilitySizer(BaseSizer):
             if stop_distance is not None
             else volatility_distance
         )
-        per_unit_risk = self._per_unit_risk(effective_distance, spec)
+        try:
+            per_unit_risk, quote_to_account_rate = self._per_unit_risk(
+                effective_distance,
+                instrument=instrument,
+                entry_price=entry_price,
+                spec=spec,
+                metadata=normalized_metadata,
+            )
+        except (TypeError, ValueError) as exc:
+            return self._reject(
+                method=self.method,
+                instrument=instrument,
+                side=side,
+                equity=equity,
+                entry_price=entry_price,
+                stop_price=stop_price,
+                stop_distance=effective_distance,
+                raw_size=0.0,
+                spec=spec,
+                reason="missing_quote_conversion",
+                details={**details, "quote_conversion_error": str(exc)},
+            )
+
         risk_amount = equity * self.risk_percent
         details["stop_distance_input"] = stop_distance
         details["volatility_distance"] = volatility_distance
         details["effective_distance"] = effective_distance
         details["per_unit_risk"] = per_unit_risk
         details["risk_amount"] = risk_amount
+        details["quote_to_account_rate"] = quote_to_account_rate
         raw_size = risk_amount / per_unit_risk
         return self._accept_or_reject_size(
             method=self.method,

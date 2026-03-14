@@ -9,6 +9,7 @@ import math
 from typing import Any, Literal
 
 from backtester.config import InstrumentSpec, resolve_instrument_spec
+from backtester.core.fx_conversion import direct_quote_to_account_rate
 
 EntrySide = Literal["long", "short"]
 
@@ -103,14 +104,64 @@ class BaseSizer(ABC):
             return None, "zero_stop_distance"
         return distance, None
 
-    def _per_unit_risk(self, distance: float, spec: InstrumentSpec) -> float:
-        return distance * spec.contract_size * spec.point_value
+    def _quote_to_account_rate(
+        self,
+        *,
+        instrument: str,
+        entry_price: float,
+        spec: InstrumentSpec,
+        metadata: dict[str, Any],
+    ) -> float:
+        explicit_rate = metadata.get("quote_to_account_rate")
+        if explicit_rate is not None:
+            if isinstance(explicit_rate, bool):
+                raise TypeError("quote_to_account_rate must be numeric when provided")
+            rate = float(explicit_rate)
+            if not math.isfinite(rate) or rate <= 0.0:
+                raise ValueError("quote_to_account_rate must be a positive finite number")
+            return rate
+
+        derived_rate = direct_quote_to_account_rate(
+            instrument,
+            price=float(entry_price),
+        )
+        if derived_rate is not None:
+            return float(derived_rate)
+
+        if spec.point_value is not None:
+            return float(spec.point_value)
+
+        raise ValueError(
+            "quote_to_account_rate is required for instruments whose quote currency "
+            "does not match the USD account and cannot be derived from the traded price"
+        )
+
+    def _per_unit_risk(
+        self,
+        distance: float,
+        *,
+        instrument: str,
+        entry_price: float,
+        spec: InstrumentSpec,
+        metadata: dict[str, Any],
+    ) -> tuple[float, float]:
+        quote_to_account_rate = self._quote_to_account_rate(
+            instrument=instrument,
+            entry_price=entry_price,
+            spec=spec,
+            metadata=metadata,
+        )
+        per_unit_risk = distance * spec.contract_size * quote_to_account_rate
+        return per_unit_risk, quote_to_account_rate
 
     def _finalize_size(self, raw_size: float, *, size_step: float) -> float:
         if raw_size <= 0:
             return 0.0
         step = Decimal(str(size_step))
-        multiples = (Decimal(str(raw_size)) / step).to_integral_value(rounding=ROUND_DOWN)
+        epsilon = Decimal("1e-9")
+        multiples = ((Decimal(str(raw_size)) / step) + epsilon).to_integral_value(
+            rounding=ROUND_DOWN
+        )
         return float(multiples * step)
 
     def _default_details(

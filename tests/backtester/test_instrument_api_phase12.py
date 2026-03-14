@@ -315,6 +315,67 @@ def test_instrument_api_rejects_invalid_requests_cleanly(make_oanda_frame):
     assert "does not accept a source parameter" in InstrumentApiErrorStrategy.errors["unsupported_source"]
 
 
+def test_visible_frame_gates_context_rows_by_primary_bar_end_not_feed_length(make_oanda_frame):
+    primary = _frame_for_hours(
+        make_oanda_frame,
+        [10.0, 11.0, 12.0, 13.0, 14.0],
+        start="2024-01-01T00:00:00Z",
+    )
+    context = _frame_for_four_hours(
+        make_oanda_frame,
+        [100.0, 200.0],
+        start="2024-01-01T00:00:00Z",
+    )
+
+    normalized_primary = instrument_api_module.pd.DataFrame(primary)
+    normalized_primary["bar_start_time"] = normalized_primary["time"]
+    normalized_primary["bar_end_time"] = normalized_primary["time"] + pd.Timedelta(hours=1)
+    normalized_primary["time"] = normalized_primary["bar_end_time"]
+    normalized_primary.index = pd.DatetimeIndex(normalized_primary["bar_end_time"], name="time")
+
+    normalized_context = instrument_api_module.pd.DataFrame(context)
+    normalized_context["bar_start_time"] = normalized_context["time"]
+    normalized_context["bar_end_time"] = normalized_context["time"] + pd.Timedelta(hours=4)
+    normalized_context["time"] = normalized_context["bar_end_time"]
+    normalized_context.index = pd.DatetimeIndex(normalized_context["bar_end_time"], name="time")
+
+    class _FakeStrategy:
+        def __len__(self):
+            return 5
+
+    class _FakeDateTime:
+        def __init__(self, current):
+            self._current = current
+
+        def datetime(self, ago=0):
+            assert ago == 0
+            return self._current.to_pydatetime()
+
+    class _FakeFeed:
+        def __init__(self, current, length):
+            self.datetime = _FakeDateTime(current)
+            self._length = length
+
+        def __len__(self):
+            return self._length
+
+    runtime = instrument_api_module.InstrumentRuntime(
+        strategy=_FakeStrategy(),
+        feeds_by_timeframe={
+            "H1": _FakeFeed(pd.Timestamp("2024-01-01T05:00:00Z"), 5),
+            "H4": _FakeFeed(pd.Timestamp("2024-01-01T08:00:00Z"), 2),
+        },
+        dataframes_by_timeframe={"H1": normalized_primary, "H4": normalized_context},
+        instrument="XAU_USD",
+        primary_timeframe="H1",
+    )
+
+    visible = runtime._visible_frame("H4")
+
+    assert len(visible) == 1
+    assert visible.iloc[-1]["close"] == pytest.approx(100.0)
+
+
 def test_instrument_api_keeps_time_aware_indicators_on_completed_bar_time(make_oanda_frame):
     InstrumentApiTimeAlignedIndicatorsStrategy.previous_high_first_bar = None
     InstrumentApiTimeAlignedIndicatorsStrategy.tokyo_active_flags = []
@@ -370,4 +431,4 @@ def test_instrument_api_strategy_flows_through_reporting_and_optimization(make_o
     assert not result.order_ledger.empty
     assert not result.trade_ledger.empty
     assert len(optimization.table()) == 1
-    assert optimization.best_trial().timeframes == ("H1", "H4")
+    assert optimization.best_trial(allow_in_sample=True).timeframes == ("H1", "H4")

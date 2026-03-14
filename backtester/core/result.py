@@ -105,6 +105,12 @@ class BacktestRecorder(bt.Analyzer):
         )
 
     def notify_trade(self, trade):
+        converted_pnl = _convert_trade_pnl_to_account(self.strategy.broker, trade, float(trade.pnl))
+        converted_pnlcomm = _convert_trade_pnl_to_account(
+            self.strategy.broker,
+            trade,
+            float(trade.pnlcomm),
+        )
         self.trade_events.append(
             {
                 "event_time": _bt_num_to_timestamp(trade.data, trade.data.datetime[0]),
@@ -116,8 +122,8 @@ class BacktestRecorder(bt.Analyzer):
                 "price": float(trade.price),
                 "value": float(trade.value),
                 "commission": float(trade.commission),
-                "pnl": float(trade.pnl),
-                "pnlcomm": float(trade.pnlcomm),
+                "pnl": converted_pnl,
+                "pnlcomm": converted_pnlcomm,
                 "isopen": bool(trade.isopen),
                 "isclosed": bool(trade.isclosed),
                 "justopened": bool(trade.justopened),
@@ -127,7 +133,7 @@ class BacktestRecorder(bt.Analyzer):
             }
         )
         if trade.isclosed:
-            closed_trade_event = _closed_trade_to_record(trade)
+            closed_trade_event = _closed_trade_to_record(trade, broker=self.strategy.broker)
             if closed_trade_event is not None:
                 self.closed_trade_events.append(closed_trade_event)
 
@@ -150,6 +156,7 @@ def build_backtest_result(
     parameters: dict[str, Any],
     config: BacktestConfig,
     instrument_spec: InstrumentSpec | None = None,
+    quote_conversion_policy: dict[str, Any] | None = None,
 ) -> BacktestResult:
     active_spec = instrument_spec or resolve_instrument_spec(instrument)
     recorder = strategy.analyzers.phase1_recorder.get_analysis()
@@ -269,6 +276,7 @@ def build_backtest_result(
             "margin_model": "notional_margin",
             "leverage": config.execution.leverage,
             "point_value": active_spec.point_value,
+            **dict(quote_conversion_policy or {}),
         },
         timeframes=tuple(timeframes or (timeframe,)),
     )
@@ -280,7 +288,7 @@ def _records_to_frame(records: list[dict[str, Any]], *, columns: list[str]) -> p
     return pd.DataFrame.from_records(records, columns=columns)
 
 
-def _closed_trade_to_record(trade) -> dict[str, Any] | None:
+def _closed_trade_to_record(trade, *, broker=None) -> dict[str, Any] | None:
     history = list(getattr(trade, "history", []) or [])
     if not history:
         return None
@@ -311,8 +319,8 @@ def _closed_trade_to_record(trade) -> dict[str, Any] | None:
         "entry_price": float(entry_event.status.price),
         "exit_price": float(getattr(exit_event.event, "price", 0.0)),
         "size": entry_size,
-        "gross_pnl": float(trade.pnl),
-        "net_pnl": float(trade.pnlcomm),
+        "gross_pnl": _convert_trade_pnl_to_account(broker, trade, float(trade.pnl)),
+        "net_pnl": _convert_trade_pnl_to_account(broker, trade, float(trade.pnlcomm)),
         "commission": float(trade.commission),
         "bars_held": int(trade.barlen),
         "hold_time": hold_time,
@@ -326,6 +334,35 @@ def _bt_num_to_timestamp(data, value: float) -> pd.Timestamp | pd.NaT:
         return pd.NaT
     dt = data.num2date(value, tz=None, naive=True)
     return pd.Timestamp(dt, tz="UTC")
+
+
+def _convert_trade_pnl_to_account(broker, trade, raw_pnl: float) -> float:
+    if broker is None or raw_pnl == 0.0 or not hasattr(broker, "_quote_to_account_rate"):
+        return float(raw_pnl)
+
+    reference_price = _trade_conversion_reference_price(trade)
+    event_time = _bt_num_to_timestamp(trade.data, trade.data.datetime[0])
+    if pd.isna(event_time):
+        return float(raw_pnl)
+
+    rate = broker._quote_to_account_rate(trade.data, price=reference_price, dt=event_time)
+    return float(raw_pnl) * float(rate)
+
+
+def _trade_conversion_reference_price(trade) -> float:
+    history = list(getattr(trade, "history", []) or [])
+    if history:
+        exit_event = history[-1]
+        exit_price = float(getattr(getattr(exit_event, "event", None), "price", 0.0))
+        if exit_price > 0.0:
+            return exit_price
+    if trade.price:
+        return float(trade.price)
+    if trade.size > 0:
+        return float(trade.data.bid_close[0])
+    if trade.size < 0:
+        return float(trade.data.ask_close[0])
+    return float(trade.data.close[0])
 
 
 def _to_builtin(value: Any) -> Any:

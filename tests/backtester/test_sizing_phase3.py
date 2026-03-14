@@ -16,20 +16,20 @@ from backtester.strategy import BaseStrategy
 
 PHASE9_CORE_INSTRUMENTS = (
     ("EUR_USD", 0.0001, 5, 0.00001, 1.0),
-    ("USD_JPY", 0.01, 3, 0.001, 0.0067),
+    ("USD_JPY", 0.01, 3, 0.001, None),
     ("GBP_USD", 0.0001, 5, 0.00001, 1.0),
     ("AUD_USD", 0.0001, 5, 0.00001, 1.0),
-    ("USD_CHF", 0.0001, 5, 0.00001, 1.14),
-    ("USD_CAD", 0.0001, 5, 0.00001, 0.74),
+    ("USD_CHF", 0.0001, 5, 0.00001, None),
+    ("USD_CAD", 0.0001, 5, 0.00001, None),
     ("NZD_USD", 0.0001, 5, 0.00001, 1.0),
-    ("EUR_JPY", 0.01, 3, 0.001, 0.0067),
-    ("GBP_JPY", 0.01, 3, 0.001, 0.0067),
-    ("EUR_GBP", 0.0001, 5, 0.00001, 1.27),
-    ("EUR_CHF", 0.0001, 5, 0.00001, 1.14),
-    ("AUD_JPY", 0.01, 3, 0.001, 0.0067),
-    ("GBP_CHF", 0.0001, 5, 0.00001, 1.14),
-    ("EUR_AUD", 0.0001, 5, 0.00001, 0.65),
-    ("EUR_CAD", 0.0001, 5, 0.00001, 0.74),
+    ("EUR_JPY", 0.01, 3, 0.001, None),
+    ("GBP_JPY", 0.01, 3, 0.001, None),
+    ("EUR_GBP", 0.0001, 5, 0.00001, None),
+    ("EUR_CHF", 0.0001, 5, 0.00001, None),
+    ("AUD_JPY", 0.01, 3, 0.001, None),
+    ("GBP_CHF", 0.0001, 5, 0.00001, None),
+    ("EUR_AUD", 0.0001, 5, 0.00001, None),
+    ("EUR_CAD", 0.0001, 5, 0.00001, None),
     ("XAU_USD", 0.01, 3, 0.001, 1.0),
 )
 
@@ -151,7 +151,7 @@ def test_instrument_resolver_handles_xau_fx_and_jpy_pairs():
     assert jpy.pip_size == 0.01
     assert jpy.display_precision == 3
     assert jpy.price_step == pytest.approx(0.001)
-    assert jpy.point_value == pytest.approx(0.0067)
+    assert jpy.point_value is None
     assert xau.min_size == pytest.approx(0.1)
     assert xau.size_step == pytest.approx(0.1)
     assert xau.point_value == pytest.approx(1.0)
@@ -175,7 +175,10 @@ def test_phase9_core_universe_has_explicit_metadata(
     assert spec.pip_size == pytest.approx(pip_size)
     assert spec.display_precision == display_precision
     assert spec.price_step == pytest.approx(price_step)
-    assert spec.point_value == pytest.approx(point_value)
+    if point_value is None:
+        assert spec.point_value is None
+    else:
+        assert spec.point_value == pytest.approx(point_value)
     if instrument == "XAU_USD":
         assert spec.min_size == pytest.approx(0.1)
         assert spec.size_step == pytest.approx(0.1)
@@ -258,9 +261,10 @@ def test_risk_percent_sizer_scales_jpy_pairs_to_comparable_usd_risk():
     assert eur_decision.accepted is True
     assert jpy_decision.accepted is True
     assert eur_decision.raw_size == pytest.approx(20_000.0)
-    assert jpy_decision.raw_size == pytest.approx(100.0 / (0.50 * 0.0067))
-    assert jpy_decision.final_size == pytest.approx(29_850.0)
-    assert jpy_decision.details["per_unit_risk"] == pytest.approx(0.00335)
+    assert jpy_decision.raw_size == pytest.approx(100.0 / (0.50 * (1.0 / 150.0)))
+    assert jpy_decision.final_size == pytest.approx(30_000.0)
+    assert jpy_decision.details["per_unit_risk"] == pytest.approx(0.0033333333333333335)
+    assert jpy_decision.details["quote_to_account_rate"] == pytest.approx(1.0 / 150.0)
     assert (
         eur_decision.final_size
         * eur_decision.details["per_unit_risk"]
@@ -269,6 +273,31 @@ def test_risk_percent_sizer_scales_jpy_pairs_to_comparable_usd_risk():
         * jpy_decision.details["per_unit_risk"],
         abs=0.01,
     )
+
+
+def test_cross_currency_sizer_requires_explicit_quote_conversion_rate():
+    decision = RiskPercentSizer(0.01).size_for_entry(
+        equity=10_000.0,
+        side="long",
+        entry_price=0.8500,
+        stop_price=0.8450,
+        instrument="EUR_GBP",
+    )
+
+    assert decision.accepted is False
+    assert decision.reason == "missing_quote_conversion"
+
+    accepted = RiskPercentSizer(0.01).size_for_entry(
+        equity=10_000.0,
+        side="long",
+        entry_price=0.8500,
+        stop_price=0.8450,
+        instrument="EUR_GBP",
+        metadata={"quote_to_account_rate": 1.25},
+    )
+
+    assert accepted.accepted is True
+    assert accepted.details["quote_to_account_rate"] == pytest.approx(1.25)
 
 
 @pytest.mark.parametrize(

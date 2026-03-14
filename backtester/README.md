@@ -10,9 +10,10 @@ If you are starting from the repo root, read [../README.md](../README.md) first.
 - one CLI: `python -m backtester.run_backtest`
 - strict loader and validation support for the extractor's 14-column candle contract
 - bid/ask-aware execution on top of `backtrader`
-- USD-account FX valuation with explicit `point_value` metadata and leverage-aware margin usage
+- USD-account FX valuation with dynamic quote-to-account conversion and leverage-aware margin usage
 - reusable strategy helpers, built-in indicators, position sizers, performance analysis, optimization, and reporting
-- a small public [`examples/`](examples/README.md) package for runnable documentation examples
+- a canonical top-level [`../strategies/`](../strategies/README.md) sample-strategy library
+- a small public [`examples/`](examples/README.md) package kept for secondary docs support
 
 The package does not fetch candles from OANDA directly. Use the extractor first, then point the backtester at the resulting CSV.
 
@@ -27,6 +28,7 @@ The package does not fetch candles from OANDA directly. Use the extractor first,
 - [performance/README.md](performance/README.md): metrics, summaries, run comparison
 - [optimization/README.md](optimization/README.md): grid, random, and scipy search
 - [reporting/README.md](reporting/README.md): JSON, CSV, chart, and HTML artifact export
+- [../strategies/README.md](../strategies/README.md): canonical runnable strategy library
 - [examples/README.md](examples/README.md): importable strategies used by the docs
 
 ## Install
@@ -75,13 +77,13 @@ Programmatic run:
 @'
 from pathlib import Path
 
-from backtester.examples import QuickstartStrategy
+from strategies import EmaRsiTrendStrategy
 from backtester.run_backtest import run_backtest
 
 csv_path = Path("oanda-candle-extractor") / "data" / "EUR_USD" / "candles_EUR_USD_D.csv"
 
 result = run_backtest(
-    QuickstartStrategy,
+    EmaRsiTrendStrategy,
     instrument="EUR_USD",
     timeframe="D",
     csv_path=str(csv_path),
@@ -114,15 +116,15 @@ The only backtester CLI today is:
 python -m backtester.run_backtest --help
 ```
 
-Runnable example using the public docs package:
+Runnable example using the canonical strategy library:
 
 ```powershell
 python -m backtester.run_backtest `
   --csv-path oanda-candle-extractor\data\EUR_USD\candles_EUR_USD_D.csv `
   --instrument EUR_USD `
   --timeframe D `
-  --strategy-module backtester.examples `
-  --strategy-class QuickstartStrategy
+  --strategy-module strategies.ema_rsi_trend `
+  --strategy-class EmaRsiTrendStrategy
 ```
 
 Available CLI flags:
@@ -151,10 +153,11 @@ Main types:
 
 - `BacktestConfig`: top-level settings for a run
 - `ExecutionConfig`: execution assumptions such as `same_bar_policy` and `leverage`
-- `InstrumentSpec`: per-instrument sizing and valuation metadata, including `point_value`
-- `resolve_instrument_spec()`: conservative FX defaults plus explicit 16-instrument Phase 9 overrides with `pip_size`, `display_precision`, `price_step`, and `point_value`
+- `InstrumentSpec`: per-instrument sizing and valuation metadata
+- `resolve_instrument_spec()`: conservative FX defaults plus explicit 16-instrument Phase 9 overrides with `pip_size`, `display_precision`, and `price_step`
 
 Current valuation assumes a USD account. Non-USD account conversion is out of scope.
+Pairs quoted in USD convert directly. Pairs with USD as the base currency derive quote-to-account conversion dynamically from the traded price. Cross-currency pairs require explicit `conversion_data={"GBP_USD": <csv-or-dataframe>, ...}` when you call `run_backtest()`.
 
 Minimal example:
 
@@ -174,6 +177,8 @@ print(config.cash)
 print(config.execution.leverage)
 print(spec.instrument, spec.pip_size, spec.display_precision, spec.price_step, spec.point_value)
 ```
+
+For `EUR_USD` and `XAU_USD`, `spec.point_value` remains `1.0` because the quote currency already matches the USD account. For non-USD-quoted pairs, runtime conversion is dynamic and `spec.point_value` is `None`.
 
 ## Multi-Timeframe Support
 
@@ -203,6 +208,30 @@ Key rules:
 
 `BaseStrategy.instrument_api` only exposes the runtime-safe indicator subset. Repainting helpers such as `savgol_smooth`, `swing_highs_lows`, `bos_choch`, `ob`, `liquidity`, `premium_discount`, `retracements`, and `ICTFibEngine` remain importable from `backtester.indicators` for offline research, but are rejected through `instrument_api`.
 
+## Optimization Notes
+
+`run_grid_search()`, `run_random_search()`, and `run_scipy_optimization()` still record in-sample search scores for diagnostics, but ranked outputs now require an out-of-sample path:
+
+- use `holdout_fraction=...` for one contiguous train/evaluation split
+- or pass explicit `evaluation_csv_path` / `evaluation_dataframe` plus optional evaluation context/conversion data
+- `OptimizationResult.ranking()` and `best_trial()` reject in-sample-only results unless you pass `allow_in_sample=True`
+- reporting exports now leave `best_runs` empty when no out-of-sample score exists
+
+## Strategy Library
+
+The canonical runnable showcase strategies live in [`../strategies/`](../strategies/README.md).
+
+They currently provide:
+
+- `EmaRsiTrendStrategy`
+- `MacdAtrBreakoutStrategy`
+- `BollingerZscoreReversionStrategy`
+- `SmcPullbackStrategy`
+- `IctOteSniperStrategy`
+- `HybridRegimeStrategy`
+
+Use `--strategy-module strategies.<module>` for the normal CLI path.
+
 ## Examples Package
 
 The public docs package lives in [`backtester/examples/`](examples/README.md).
@@ -213,7 +242,7 @@ It currently provides:
 - `WindowStrategy`: parameterized strategy for optimization examples
 - `InstrumentApiStrategy`: `BaseStrategy` example using `instrument_api`
 
-This package exists to make the docs runnable. It is not a replacement for the planned Phase 10 strategy library.
+This package exists to make the docs runnable. It is not the canonical `strategies/` showcase library.
 
 ## Verification
 

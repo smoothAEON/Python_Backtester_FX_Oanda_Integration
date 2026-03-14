@@ -243,4 +243,4 @@ def test_grid_search_passes_context_data_through_to_trials(make_oanda_frame):
 
     assert len(table) == 1
     assert tuple(table.iloc[0]["timeframes"]) == ("H1", "H4")
-    assert result.best_trial().timeframes == ("H1", "H4")
+    assert result.best_trial(allow_in_sample=True).timeframes == ("H1", "H4")

@@ -16,7 +16,7 @@ This index maps the current public backtester surfaces to their module paths.
 
 ## Config
 
-Relevant current fields: `ExecutionConfig.leverage` controls leveraged notional-margin simulation, and `InstrumentSpec.point_value` carries the static quote-currency-to-USD conversion used by sizing and P&L.
+Relevant current fields: `ExecutionConfig.leverage` controls leveraged notional-margin simulation. `InstrumentSpec.point_value` is only constant when the quote currency already matches the USD account; otherwise runtime conversion is dynamic.
 
 | Symbol | Import Path |
 | ------ | ----------- |
@@ -111,6 +111,8 @@ Direct indicator exports are broader than the strategy runtime surface. Repainti
 
 ## Optimization
 
+Ranked optimization outputs now require an out-of-sample score. Use `holdout_fraction` or `evaluation_*` inputs on the optimizer entry points, or pass `allow_in_sample=True` only for diagnostic inspection of in-sample tables.
+
 | Symbol | Import Path |
 | ------ | ----------- |
 | `ParameterSpec` | `backtester.optimization.ParameterSpec` |
@@ -135,6 +137,8 @@ Direct indicator exports are broader than the strategy runtime surface. Repainti
 | `export_optimization_artifacts` | `backtester.reporting.export_optimization_artifacts` |
 
 ## Examples
+
+Canonical runnable sample strategies now live in the top-level `strategies/` package. The entries below remain available for the minimal docs/examples package.
 
 | Symbol | Import Path |
 | ------ | ----------- |

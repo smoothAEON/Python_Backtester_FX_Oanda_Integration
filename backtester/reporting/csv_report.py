@@ -78,7 +78,7 @@ def write_optimization_csv_reports(
             target_dir / "optimization_results.csv",
         ),
         "best_runs_csv": _write_frame(
-            result.ranking().head(top_n),
+            _best_runs_frame(result, top_n=top_n),
             target_dir / "best_runs.csv",
         ),
         "warnings_csv": _write_frame(warnings_frame, target_dir / "warnings.csv"),
@@ -148,3 +148,10 @@ def _csv_scalar(value: Any) -> Any:
     if isinstance(normalized, (dict, list)):
         return json.dumps(normalized, sort_keys=True)
     return normalized
+
+
+def _best_runs_frame(result: OptimizationResult, *, top_n: int) -> pd.DataFrame:
+    try:
+        return result.ranking().head(top_n)
+    except ValueError:
+        return pd.DataFrame()

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`backtester.examples` provides a small set of importable strategies used by the documentation and tests. These classes are public and runnable today, but they are intentionally minimal.
+`backtester.examples` provides a small set of importable strategies used by the documentation and tests. These classes remain public and runnable, but they are intentionally minimal and secondary to the top-level `strategies/` package.
 
 ## Available Example Strategies
 
@@ -31,7 +31,7 @@ Programmatic import:
 from backtester.examples import InstrumentApiStrategy, QuickstartStrategy, WindowStrategy
 ```
 
-This package exists to support runnable docs. It is not the future Phase 10 strategy library.
+This package exists to support runnable docs. The canonical showcase strategy library now lives in `strategies/`.
 
 ## Command-Line Flags
 

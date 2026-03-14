@@ -5,6 +5,7 @@ from __future__ import annotations
 import backtrader as bt
 
 from backtester.config import BacktestConfig, InstrumentSpec
+from backtester.core.fx_conversion import QuoteConversionBook
 
 from .execution import BidAskBroker, ExecutionModel
 from .result import BacktestRecorder
@@ -17,21 +18,22 @@ def build_cerebro(
     config: BacktestConfig | None = None,
     strategy_params: dict | None = None,
     instrument_spec: InstrumentSpec | None = None,
+    quote_conversion_book: QuoteConversionBook | None = None,
 ) -> bt.Cerebro:
     """Create a consistently configured Cerebro instance for one strategy run."""
 
     active_config = config or BacktestConfig()
     cerebro = bt.Cerebro(stdstats=False)
 
-    broker = BidAskBroker(execution_model=ExecutionModel(active_config.execution))
+    broker = BidAskBroker(
+        execution_model=ExecutionModel(active_config.execution),
+        quote_conversion_book=quote_conversion_book,
+    )
     broker.setcash(active_config.cash)
-    point_value = instrument_spec.point_value if instrument_spec is not None else 1.0
-    # Use futures-like commission info so FX cash usage follows leveraged notional
-    # and P&L stays scaled into the USD account currency via ``point_value``.
     broker.setcommission(
         commission=active_config.execution.commission,
         margin=1.0,
-        mult=point_value,
+        mult=1.0,
         commtype=bt.CommInfoBase.COMM_PERC,
         percabs=True,
         stocklike=False,

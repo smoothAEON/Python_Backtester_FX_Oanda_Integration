@@ -144,8 +144,8 @@ class InstrumentRuntime:
         side: PriceSide = "mid",
     ) -> PriceBar:
         active_timeframe = self._normalize_timeframe(timeframe)
-        feed = self._feed(active_timeframe)
-        if len(feed) <= 0:
+        frame = self._visible_source_frame(active_timeframe)
+        if frame.empty:
             raise RuntimeError(f"No completed bars are available yet for {active_timeframe}")
 
         if side == "mid":
@@ -155,12 +155,13 @@ class InstrumentRuntime:
         else:
             raise ValueError("side must be one of 'mid', 'bid', or 'ask'")
 
+        latest = frame.iloc[-1]
         return PriceBar(
-            open=float(getattr(feed, f"{prefix}open")[0]),
-            high=float(getattr(feed, f"{prefix}high")[0]),
-            low=float(getattr(feed, f"{prefix}low")[0]),
-            close=float(getattr(feed, f"{prefix}close")[0]),
-            volume=float(feed.volume[0]),
+            open=float(latest[f"{prefix}open"]),
+            high=float(latest[f"{prefix}high"]),
+            low=float(latest[f"{prefix}low"]),
+            close=float(latest[f"{prefix}close"]),
+            volume=float(latest["volume"]),
         )
 
     def indicator(
@@ -350,13 +351,35 @@ class InstrumentRuntime:
         return frame[column]
 
     def _visible_frame(self, timeframe: str) -> pd.DataFrame:
+        return self._visible_source_frame(timeframe).loc[
+            :,
+            ["open", "high", "low", "close", "volume"],
+        ]
+
+    def _visible_source_frame(self, timeframe: str) -> pd.DataFrame:
         dataframe_source = self._dataframes_by_timeframe.get(timeframe)
         if dataframe_source is None:
             raise TypeError(
                 f"Instrument runtime requires a DataFrame-backed feed for {timeframe}"
             )
-        feed = self._feed(timeframe)
-        return dataframe_source.iloc[: len(feed)].loc[:, ["open", "high", "low", "close", "volume"]]
+        current_primary_bar_end = self._current_primary_bar_end()
+        if "bar_end_time" in dataframe_source.columns:
+            visible = dataframe_source.loc[
+                dataframe_source["bar_end_time"] <= current_primary_bar_end
+            ]
+        else:
+            visible = dataframe_source.loc[dataframe_source.index <= current_primary_bar_end]
+        return visible.copy()
+
+    def _current_primary_bar_end(self) -> pd.Timestamp:
+        primary_timeframe = self._normalize_timeframe(None)
+        primary_feed = self._feed(primary_timeframe)
+        if len(primary_feed) <= 0:
+            raise RuntimeError(f"No completed bars are available yet for {primary_timeframe}")
+        timestamp = pd.Timestamp(primary_feed.datetime.datetime(0))
+        if timestamp.tzinfo is None:
+            return timestamp.tz_localize("UTC")
+        return timestamp.tz_convert("UTC")
 
     def _feed(self, timeframe: str):
         feed = self._feeds_by_timeframe.get(timeframe)

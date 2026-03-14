@@ -92,13 +92,15 @@ def build_optimization_json_payload(
             "optimizer_name": result.optimizer_name,
             **dict(result.metadata),
             "top_n": int(top_n),
+            "ranking_score_source": result.ranking_score_source,
+            "ranking_available": result.can_rank_out_of_sample(),
         },
         "warnings": [
             {"code": warning.code, "message": warning.message}
             for warning in result.warnings
         ],
         "trials": _frame_to_records(result.table()),
-        "best_runs": _frame_to_records(result.ranking().head(top_n)),
+        "best_runs": _frame_to_records(_best_runs_frame(result, top_n=top_n)),
     }
     return _sanitize_for_serialization(payload)
 
@@ -216,6 +218,13 @@ def _parameter_spec_record(spec: ParameterSpec) -> dict[str, Any]:
         "step": spec.step,
         "distribution": spec.distribution,
     }
+
+
+def _best_runs_frame(result: OptimizationResult, *, top_n: int) -> pd.DataFrame:
+    try:
+        return result.ranking().head(top_n)
+    except ValueError:
+        return pd.DataFrame()
 
 
 def _frame_to_records(frame: pd.DataFrame) -> list[dict[str, Any]]:

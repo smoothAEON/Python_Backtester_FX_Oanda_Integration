@@ -82,7 +82,7 @@ def test_grid_search_enumerates_in_declared_order_and_ranks_best_run(make_oanda_
     )
 
     table = result.table()
-    ranking = result.ranking()
+    ranking = result.ranking(allow_in_sample=True)
 
     assert len(table) == 4
     assert list(table["status"]) == ["invalid", "completed", "invalid", "completed"]
@@ -98,8 +98,8 @@ def test_grid_search_enumerates_in_declared_order_and_ranks_best_run(make_oanda_
     ]
     assert len(ranking) == 2
     assert ranking.iloc[0]["parameters"] == {"entry_bar": 1, "exit_bar": 3}
-    assert result.best_trial().parameters == {"entry_bar": 1, "exit_bar": 3}
-    assert result.best_result().parameters == {"entry_bar": 1, "exit_bar": 3}
+    assert result.best_trial(allow_in_sample=True).parameters == {"entry_bar": 1, "exit_bar": 3}
+    assert result.best_result(allow_in_sample=True).parameters == {"entry_bar": 1, "exit_bar": 3}
 
 
 def test_random_search_is_reproducible_and_avoids_duplicate_parameter_sets(make_oanda_frame):
@@ -137,7 +137,9 @@ def test_random_search_is_reproducible_and_avoids_duplicate_parameter_sets(make_
     assert list(first_table["objective_score"]) == list(second_table["objective_score"])
     assert len(set(_sorted_parameter_items(first_table))) == len(first_table)
     assert first_table["cache_hit"].eq(False).all()
-    assert _sorted_parameter_items(first.ranking()) == _sorted_parameter_items(second.ranking())
+    assert _sorted_parameter_items(first.ranking(allow_in_sample=True)) == _sorted_parameter_items(
+        second.ranking(allow_in_sample=True)
+    )
 
 
 def test_scipy_optimizer_clips_bounds_rounds_ints_and_records_cached_repeats(
@@ -191,7 +193,7 @@ def test_scipy_optimizer_clips_bounds_rounds_ints_and_records_cached_repeats(
     assert list(table["cache_hit"]) == [False, False, True]
     assert WindowTradeStrategy.run_counter == 2
     assert len(table) == 3
-    assert result.best_trial().parameters == {"entry_bar": 2, "exit_bar": 3}
+    assert result.best_trial(allow_in_sample=True).parameters == {"entry_bar": 2, "exit_bar": 3}
 
 
 def test_callable_objective_receives_context_and_controls_ranking(make_oanda_frame):
@@ -220,11 +222,11 @@ def test_callable_objective_receives_context_and_controls_ranking(make_oanda_fra
         ),
     )
 
-    ranking = result.ranking()
+    ranking = result.ranking(allow_in_sample=True)
 
     assert len(seen_parameters) == 4
     assert ranking.iloc[0]["objective_name"] == "entry_bias"
-    assert result.best_trial().parameters == {"entry_bar": 2, "exit_bar": 3}
+    assert result.best_trial(allow_in_sample=True).parameters == {"entry_bar": 2, "exit_bar": 3}
 
 
 def test_non_finite_callable_objective_marks_trial_invalid_and_excludes_it_from_ranking(
@@ -247,13 +249,13 @@ def test_non_finite_callable_objective_marks_trial_invalid_and_excludes_it_from_
     )
 
     table = result.table()
-    ranking = result.ranking()
+    ranking = result.ranking(allow_in_sample=True)
 
     assert list(table["status"]) == ["invalid", "completed"]
     assert table.iloc[0]["error"] == "objective_score_not_finite"
     assert pd.isna(table.iloc[1]["error"])
     assert len(ranking) == 1
-    assert result.best_trial().parameters == {"exit_bar": 3, "entry_bar": 2}
+    assert result.best_trial(allow_in_sample=True).parameters == {"exit_bar": 3, "entry_bar": 2}
 
 
 def test_failed_trials_stay_in_table_but_are_excluded_from_ranking(make_oanda_frame):
@@ -270,16 +272,99 @@ def test_failed_trials_stay_in_table_but_are_excluded_from_ranking(make_oanda_fr
     )
 
     table = result.table()
-    ranking = result.ranking()
+    ranking = result.ranking(allow_in_sample=True)
 
     assert list(table["status"]) == ["completed", "failed"]
     assert "RuntimeError: requested explosion" in str(table.iloc[1]["error"])
     assert len(ranking) == 1
-    assert result.best_trial().parameters == {
+    assert result.best_trial(allow_in_sample=True).parameters == {
         "entry_bar": 1,
         "exit_bar": 3,
         "explode": False,
     }
+
+
+def test_in_sample_optimization_blocks_ranked_best_run_claims(make_oanda_frame):
+    frame = _phase5_frame(make_oanda_frame)
+
+    result = run_grid_search(
+        WindowTradeStrategy,
+        instrument="XAU_USD",
+        timeframe="H1",
+        dataframe=frame,
+        fixed_params={"exit_bar": 3},
+        search_space=[ParameterSpec("entry_bar", "int", grid_values=(1, 2))],
+        objective="total_return",
+    )
+
+    assert result.can_rank_out_of_sample() is False
+    assert result.metadata["ranking_available"] is False
+    with pytest.raises(ValueError, match="out-of-sample evaluation"):
+        result.ranking()
+    with pytest.raises(ValueError, match="out-of-sample evaluation"):
+        result.best_trial()
+
+
+def test_grid_search_can_publish_out_of_sample_ranking_from_explicit_evaluation_data(
+    make_oanda_frame,
+):
+    training = _phase5_frame(make_oanda_frame)
+    evaluation = make_oanda_frame(
+        [
+            {"open": 100.0, "high": 100.4, "low": 99.8, "close": 100.0},
+            {"open": 120.0, "high": 120.4, "low": 119.8, "close": 120.0},
+            {"open": 100.0, "high": 100.4, "low": 99.8, "close": 100.0},
+            {"open": 130.0, "high": 130.4, "low": 129.8, "close": 130.0},
+            {"open": 129.0, "high": 129.3, "low": 128.7, "close": 129.0},
+            {"open": 128.0, "high": 128.3, "low": 127.7, "close": 128.0},
+        ]
+    )
+
+    result = run_grid_search(
+        WindowTradeStrategy,
+        instrument="XAU_USD",
+        timeframe="H1",
+        dataframe=training,
+        evaluation_dataframe=evaluation,
+        search_space=[
+            ParameterSpec("entry_bar", "int", grid_values=(1, 2)),
+            ParameterSpec("exit_bar", "int", grid_values=(3,)),
+        ],
+        objective="total_return",
+    )
+
+    ranking = result.ranking()
+
+    assert result.can_rank_out_of_sample() is True
+    assert result.metadata["ranking_available"] is True
+    assert result.metadata["evaluation_mode"] == "explicit_evaluation"
+    assert len(ranking) == 2
+    assert ranking.iloc[0]["parameters"] == {"entry_bar": 2, "exit_bar": 3}
+    assert ranking.iloc[0]["objective_score_source"] == "out_of_sample"
+    assert ranking.iloc[0]["search_objective_score"] is not None
+    assert result.best_trial().parameters == {"entry_bar": 2, "exit_bar": 3}
+
+
+def test_holdout_fraction_builds_contiguous_out_of_sample_split(make_oanda_frame):
+    frame = _phase5_frame(make_oanda_frame)
+
+    result = run_grid_search(
+        WindowTradeStrategy,
+        instrument="XAU_USD",
+        timeframe="H1",
+        dataframe=frame,
+        holdout_fraction=0.5,
+        fixed_params={"exit_bar": 3},
+        search_space=[ParameterSpec("entry_bar", "int", grid_values=(1, 2))],
+        objective="total_return",
+    )
+
+    ranking = result.ranking()
+
+    assert result.can_rank_out_of_sample() is True
+    assert result.metadata["evaluation_mode"] == "contiguous_holdout"
+    assert result.metadata["ranking_available"] is True
+    assert not ranking.empty
 
 
 def test_optimization_rejects_bad_objectives_overlaps_and_categorical_scipy_specs(

@@ -5,10 +5,17 @@ Most helpers delegate directly to ``smartmoneyconcepts.smc``.
 its frozen fib state on top of the shared upstream swing-high/low
 contract.
 
+The upstream package prints a unicode banner on import. Redirecting that
+banner avoids Windows console encoding failures in cp1252 subprocess runs.
+
 Source: https://github.com/joshyattridge/smart-money-concepts
 """
 
-from smartmoneyconcepts import smc as _smc
+from contextlib import redirect_stdout
+from io import StringIO
+
+with redirect_stdout(StringIO()):
+    from smartmoneyconcepts import smc as _smc
 
 # ---------------------------------------------------------------------------
 # Thin wrappers around upstream ``smc.*`` functions

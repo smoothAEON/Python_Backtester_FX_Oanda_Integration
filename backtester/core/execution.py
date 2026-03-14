@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import pandas as pd
 from backtrader.brokers.bbroker import BackBroker
 from backtrader.order import Order
 
 from backtester.config import ExecutionConfig
+from backtester.core.fx_conversion import QuoteConversionBook
 
 
 @dataclass(slots=True, frozen=True)
@@ -56,11 +58,15 @@ class ExecutionModel:
 class BidAskBroker(BackBroker):
     """BackBroker variant that evaluates buy orders on ask candles and sell orders on bid candles."""
 
-    params = (("execution_model", None),)
+    params = (
+        ("execution_model", None),
+        ("quote_conversion_book", None),
+    )
 
     def __init__(self):
         super().__init__()
         self.execution_model = self.p.execution_model or ExecutionModel()
+        self.quote_conversion_book = self.p.quote_conversion_book or QuoteConversionBook()
 
     def buy(
         self,
@@ -182,6 +188,152 @@ class BidAskBroker(BackBroker):
         elif order.exectype == Order.Historical:
             self._try_exec_historical(order)
 
+    def _execute(self, order, ago=None, price=None, cash=None, position=None, dtcoc=None):
+        if ago is not None and price is None:
+            return
+
+        if self.p.filler is None or ago is None:
+            size = order.executed.remsize
+        else:
+            size = self.p.filler(order, price, ago)
+            if not order.isbuy():
+                size = -size
+
+        comminfo = self.getcommissioninfo(order.data)
+
+        if order.data._compensate is not None:
+            data = order.data._compensate
+            cinfocomp = self.getcommissioninfo(data)
+        else:
+            data = order.data
+            cinfocomp = comminfo
+
+        timestamp = self._data_timestamp(data, ago)
+
+        if ago is not None:
+            position = self.positions[data]
+            pprice_orig = position.price
+            psize, pprice, opened, closed = position.pseudoupdate(size, price)
+            pnl = self._profit_and_loss(
+                data,
+                size=-closed,
+                price=pprice_orig,
+                newprice=price,
+                dt=timestamp,
+            )
+            cash = self.cash
+        else:
+            pnl = 0.0
+            if not self.p.coo:
+                price = pprice_orig = order.created.price
+            else:
+                if order.exectype == Order.Market:
+                    price = pprice_orig = order.data.open[0]
+                else:
+                    price = pprice_orig = order.created.price
+            psize, pprice, opened, closed = position.update(size, price)
+
+        if closed:
+            if self.p.shortcash:
+                closedvalue = self._operation_cost(data, size=-closed, price=pprice_orig, dt=timestamp)
+            else:
+                closedvalue = self._operation_cost(data, size=closed, price=pprice_orig, dt=timestamp)
+
+            closecash = closedvalue
+            if closedvalue > 0:
+                closecash /= comminfo.get_leverage()
+
+            cash += closecash + pnl * comminfo.stocklike
+            closedcomm = comminfo.getcommission(closed, price)
+            cash -= closedcomm
+
+            if ago is not None:
+                cash += self._cash_adjust(
+                    data,
+                    size=-closed,
+                    price=position.adjbase,
+                    newprice=price,
+                    dt=timestamp,
+                )
+                self.cash = cash
+        else:
+            closedvalue = closedcomm = 0.0
+
+        popened = opened
+        if opened:
+            if self.p.shortcash:
+                openedvalue = self._operation_cost(data, size=opened, price=price, dt=timestamp)
+            else:
+                openedvalue = self._operation_cost(data, size=opened, price=price, dt=timestamp)
+
+            opencash = openedvalue
+            if openedvalue > 0:
+                opencash /= comminfo.get_leverage()
+
+            cash -= opencash
+
+            openedcomm = cinfocomp.getcommission(opened, price)
+            cash -= openedcomm
+
+            if cash < 0.0:
+                opened = 0
+                openedvalue = openedcomm = 0.0
+
+            elif ago is not None:
+                if abs(psize) > abs(opened):
+                    adjsize = psize - opened
+                    cash += self._cash_adjust(
+                        data,
+                        size=adjsize,
+                        price=position.adjbase,
+                        newprice=price,
+                        dt=timestamp,
+                    )
+
+                position.adjbase = price
+                self.cash = cash
+        else:
+            openedvalue = openedcomm = 0.0
+
+        if ago is None:
+            return cash
+
+        execsize = closed + opened
+
+        if execsize:
+            comminfo.confirmexec(execsize, price)
+            position.update(execsize, price, data.datetime.datetime())
+
+            if closed and self.p.int2pnl:
+                closedcomm += self.d_credit.pop(data, 0.0)
+
+            order.execute(
+                dtcoc or data.datetime[ago],
+                execsize,
+                price,
+                closed,
+                closedvalue,
+                closedcomm,
+                opened,
+                openedvalue,
+                openedcomm,
+                self._margin_per_unit(data, price=price, dt=timestamp),
+                pnl,
+                psize,
+                pprice,
+            )
+
+            order.addcomminfo(comminfo)
+
+            self.notify(order)
+            self._ococheck(order)
+
+        if popened and not opened:
+            order.margin()
+            self.notify(order)
+            self._ococheck(order)
+            self._bracketize(order, cancel=True)
+
     def next(self):
         while self._toactivate:
             self._toactivate.popleft().activate()
@@ -223,9 +375,16 @@ class BidAskBroker(BackBroker):
 
         for data, pos in self.positions.items():
             if pos:
-                comminfo = self.getcommissioninfo(data)
-                self.cash += comminfo.cashadjust(pos.size, pos.adjbase, data.close[0])
-                pos.adjbase = data.close[0]
+                current_price = self._mark_price(data, pos.size)
+                current_dt = self._data_timestamp(data)
+                self.cash += self._cash_adjust(
+                    data,
+                    size=pos.size,
+                    price=pos.adjbase,
+                    newprice=current_price,
+                    dt=current_dt,
+                )
+                pos.adjbase = current_price
 
         self._get_value()
 
@@ -269,7 +428,8 @@ class BidAskBroker(BackBroker):
         for data in datas or self.positions:
             comminfo = self.getcommissioninfo(data)
             position = self.positions[data]
-            current_price = data.close[0]
+            current_dt = self._data_timestamp(data)
+            current_price = self._mark_price(data, position.size)
             entry_price = position.price or current_price
 
             if comminfo.stocklike:
@@ -278,9 +438,19 @@ class BidAskBroker(BackBroker):
                 else:
                     dvalue = comminfo.getvaluesize(position.size, current_price)
             else:
-                dvalue = abs(position.size) * comminfo.get_margin(entry_price)
+                dvalue = abs(position.size) * self._margin_per_unit(
+                    data,
+                    price=entry_price,
+                    dt=current_dt,
+                )
 
-            dunrealized = comminfo.profitandloss(position.size, position.price, current_price)
+            dunrealized = self._profit_and_loss(
+                data,
+                size=position.size,
+                price=position.price,
+                newprice=current_price,
+                dt=current_dt,
+            )
             if datas and len(datas) == 1:
                 if lever and dvalue > 0:
                     if comminfo.stocklike:
@@ -328,3 +498,67 @@ class BidAskBroker(BackBroker):
         self._unrealized = unrealized
 
         return value if not lever else self._valuelever
+
+    def _instrument_name(self, data) -> str:
+        instrument = getattr(data, "_phase_instrument", None)
+        if not instrument:
+            raise ValueError("BidAskBroker requires data feeds with _phase_instrument set")
+        return str(instrument).strip().upper()
+
+    def _data_timestamp(self, data, ago: int | None = 0) -> pd.Timestamp:
+        if ago is None:
+            dt = data.datetime.datetime()
+        else:
+            dt = data.datetime.datetime(ago)
+        return pd.Timestamp(dt, tz="UTC")
+
+    def _quote_to_account_rate(self, data, *, price: float, dt: pd.Timestamp) -> float:
+        return self.quote_conversion_book.quote_to_account_rate(
+            self._instrument_name(data),
+            price=float(price),
+            dt=dt,
+        )
+
+    def _margin_per_unit(self, data, *, price: float, dt: pd.Timestamp) -> float:
+        return float(price) * self._quote_to_account_rate(data, price=price, dt=dt)
+
+    def _operation_cost(self, data, *, size: float, price: float, dt: pd.Timestamp) -> float:
+        return abs(float(size)) * self._margin_per_unit(data, price=price, dt=dt)
+
+    def _profit_and_loss(
+        self,
+        data,
+        *,
+        size: float,
+        price: float,
+        newprice: float,
+        dt: pd.Timestamp,
+    ) -> float:
+        if not size:
+            return 0.0
+        rate = self._quote_to_account_rate(data, price=newprice, dt=dt)
+        return float(size) * (float(newprice) - float(price)) * rate
+
+    def _cash_adjust(
+        self,
+        data,
+        *,
+        size: float,
+        price: float,
+        newprice: float,
+        dt: pd.Timestamp,
+    ) -> float:
+        return self._profit_and_loss(
+            data,
+            size=size,
+            price=price,
+            newprice=newprice,
+            dt=dt,
+        )
+
+    def _mark_price(self, data, size: float) -> float:
+        if size > 0:
+            return float(data.bid_close[0])
+        if size < 0:
+            return float(data.ask_close[0])
+        return float(data.close[0])

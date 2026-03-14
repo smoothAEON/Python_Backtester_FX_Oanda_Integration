@@ -20,7 +20,7 @@ A deterministic, bid/ask-aware backtesting system built on **backtrader** for OA
 - **Multi-timeframe support**: same-instrument higher-timeframe context feeds for signal and filter logic.
 - **Indicator library**: TA-Lib wrappers, scipy helpers, and SMC/research helpers; `instrument_api` only exposes the causal/time-safe subset during backtests.
 - **Position sizing**: fixed-lot, risk-percent, Kelly criterion, and volatility-based sizing.
-- **Optimization**: grid search, random search, and scipy-based optimization.
+- **Optimization**: grid search, random search, and scipy-based optimization with explicit out-of-sample ranking support.
 - **Reporting**: JSON, CSV, HTML reports with matplotlib charts.
 - **Rate-limited extraction**: single-instrument and fixed-universe batch CLIs with gap-only date-range fetching, transient retry hardening, and atomic CSV caching.
 
@@ -38,6 +38,7 @@ backtester/                 # backtrader-based backtesting engine
   optimization/             #   Grid, random, and scipy optimizers
   reporting/                #   JSON, CSV, HTML, and chart exporters
   examples/                 #   Public example strategies used by the docs
+strategies/                 # Canonical runnable sample strategy library
 tests/                      # pytest suites for backtester and extractor
 plans/                      # Phase plans and progress tracker
 ```
@@ -63,11 +64,11 @@ Requires `OANDA_API_KEY` and `OANDA_ACCOUNT_ID` in the environment or in `oanda-
 ### Run a backtest
 
 ```python
-from backtester.examples import QuickstartStrategy
+from strategies import EmaRsiTrendStrategy
 from backtester.run_backtest import run_backtest
 
 result = run_backtest(
-    QuickstartStrategy,
+    EmaRsiTrendStrategy,
     instrument="EUR_USD",
     timeframe="D",
     csv_path="oanda-candle-extractor/data/EUR_USD/candles_EUR_USD_D.csv",
@@ -84,14 +85,14 @@ python -m backtester.run_backtest \
   --csv-path oanda-candle-extractor/data/EUR_USD/candles_EUR_USD_D.csv \
   --instrument EUR_USD \
   --timeframe D \
-  --strategy-module backtester.examples \
-  --strategy-class QuickstartStrategy
+  --strategy-module strategies.ema_rsi_trend \
+  --strategy-class EmaRsiTrendStrategy
 ```
 
 ### Run tests
 
 ```bash
-python -m pytest tests/backtester -q    # 145 tests
+python -m pytest tests/backtester -q
 python -m pytest tests/extractor -q
 ```
 
@@ -123,6 +124,7 @@ result = run_grid_search(
     instrument="EUR_USD",
     timeframe="D",
     csv_path="oanda-candle-extractor/data/EUR_USD/candles_EUR_USD_D.csv",
+    holdout_fraction=0.25,
     search_space=[
         ParameterSpec("entry_bar", "int", grid_values=(1, 2, 3)),
         ParameterSpec("exit_bar", "int", grid_values=(4, 5, 6)),
@@ -133,14 +135,24 @@ result = run_grid_search(
 print(result.ranking().head())
 ```
 
+`OptimizationResult.ranking()` and `best_trial()` require an out-of-sample score by default. Use `holdout_fraction` or explicit `evaluation_*` inputs for deployable rankings, or pass `allow_in_sample=True` only for diagnostic inspection.
+
 ## Reporting
 
 ```python
 from pathlib import Path
-from backtester.reporting import export_backtest_artifacts
 
+from backtester.reporting import export_backtest_artifacts
+from backtester.run_backtest import run_backtest
+from strategies import EmaRsiTrendStrategy
+
+result = run_backtest(
+    EmaRsiTrendStrategy,
+    instrument="EUR_USD",
+    timeframe="D",
+    csv_path="oanda-candle-extractor/data/EUR_USD/candles_EUR_USD_D.csv",
+)
 paths = export_backtest_artifacts(result, Path("artifacts"), run_label="my_run")
-# Outputs: summary.json, CSV ledgers, PNG charts, report.html
 ```
 
 ## Data Contract
@@ -165,9 +177,9 @@ CSV path convention: `oanda-candle-extractor/data/<INSTRUMENT>/candles_<INSTRUME
 | ----- | ---- | ------ |
 | 1-8 | Foundation through documentation | Done |
 | 9 | Universe candle fetching | Done |
+| 10 | Strategy library and samples | Done |
 | 11 | Multi-timeframe backtesting | Done |
 | 12 | Master-owned instrument API | Done |
-| 10 | Strategy library and samples | Planned |
 | 13 | Repo consolidation and packaging | Planned |
 
 See [plans/](plans/) for detailed phase docs and [plans/project_checker.md](plans/project_checker.md) for the progress tracker.
@@ -178,6 +190,7 @@ See [plans/](plans/) for detailed phase docs and [plans/project_checker.md](plan
 | -------- | ------- |
 | [Backtester README](backtester/README.md) | Workflow guide, CLI flags, config notes, and component links |
 | [Backtester API Index](backtester/API_INDEX.md) | Public class/function import paths |
+| [Strategy Library README](strategies/README.md) | Canonical runnable sample strategies and real report-export example |
 | [Extractor README](oanda-candle-extractor/README.md) | Extraction usage, rate limiting, and configuration |
 | [Master Plan](plans/backtester_plan.md) | Architecture and dependency plan |
 | [Phase Breakdown](plans/backtester_phases/) | Detailed phase specifications |

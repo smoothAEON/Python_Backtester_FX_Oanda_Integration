@@ -14,6 +14,7 @@ import pandas as pd
 
 from .config import BacktestConfig, resolve_instrument_spec
 from .core.cerebro_builder import build_cerebro
+from .core.fx_conversion import QuoteConversionBook
 from .core.result import BacktestResult, build_backtest_result
 from .data.loader import OANDADataLoader
 from .data.oanda_feed import OANDABidAskData
@@ -41,6 +42,7 @@ def run_backtest(
     csv_path: str | None = None,
     dataframe: pd.DataFrame | None = None,
     context_data: dict[str, DataSource] | None = None,
+    conversion_data: dict[str, DataSource] | None = None,
     cash: float = 10_000.0,
     strategy_params: dict[str, Any] | None = None,
     config: BacktestConfig | None = None,
@@ -59,6 +61,16 @@ def run_backtest(
     )
     active_config = replace(config, cash=cash) if config is not None else BacktestConfig(cash=cash)
     loader = OANDADataLoader(allow_dedupe=active_config.allow_dedupe)
+    normalized_conversion_frames = _normalize_conversion_data(
+        conversion_data,
+        loader=loader,
+        timeframe=primary_timeframe,
+    )
+    quote_conversion_book = QuoteConversionBook(
+        account_currency="USD",
+        conversion_frames=normalized_conversion_frames,
+    )
+    quote_conversion_policy = quote_conversion_book.policy_for_instrument(normalized_instrument)
 
     if csv_path is not None:
         normalized = loader.load_csv(csv_path)
@@ -92,6 +104,7 @@ def run_backtest(
         config=active_config,
         strategy_params=strategy_params,
         instrument_spec=instrument_spec,
+        quote_conversion_book=quote_conversion_book,
     )
 
     strategies = cerebro.run(tradehistory=True)
@@ -108,6 +121,7 @@ def run_backtest(
         parameters=params,
         config=active_config,
         instrument_spec=instrument_spec,
+        quote_conversion_policy=quote_conversion_policy.to_metadata(),
     )
 
 
@@ -229,6 +243,27 @@ def _normalize_context_data(
         normalized[timeframe] = source
 
     return sorted(normalized.items(), key=lambda item: _TIMEFRAME_SECONDS[item[0]])
+
+
+def _normalize_conversion_data(
+    conversion_data: dict[str, DataSource] | None,
+    *,
+    loader: OANDADataLoader,
+    timeframe: str,
+) -> dict[str, pd.DataFrame]:
+    if conversion_data is None:
+        return {}
+    if not isinstance(conversion_data, dict):
+        raise TypeError("conversion_data must be a dict keyed by instrument")
+
+    normalized: dict[str, pd.DataFrame] = {}
+    for raw_instrument, source in conversion_data.items():
+        instrument = str(raw_instrument).strip().upper()
+        if not instrument:
+            raise ValueError("conversion_data instrument keys must be non-empty")
+        frame = _load_source_dataframe(loader, source)
+        normalized[instrument] = _normalize_backtest_frame(frame, timeframe=timeframe)
+    return normalized
 
 
 def _normalize_backtest_frame(

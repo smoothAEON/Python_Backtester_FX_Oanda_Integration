@@ -15,13 +15,20 @@ import pandas as pd
 
 from backtester.config import BacktestConfig
 from backtester.core.result import BacktestResult
+from backtester.data.loader import OANDADataLoader
 from backtester.performance import PerformanceAnalyzer, PerformanceMetrics
-from backtester.run_backtest import run_backtest
+from backtester.run_backtest import (
+    _normalize_backtest_frame,
+    _normalize_context_data,
+    _normalize_timeframe_label,
+    run_backtest,
+)
 
 ParameterKind = Literal["int", "float", "categorical"]
 DistributionKind = Literal["uniform", "loguniform"]
 ObjectiveDirection = Literal["maximize", "minimize"]
 TrialStatus = Literal["completed", "invalid", "failed"]
+ScoreSource = Literal["in_sample", "out_of_sample"]
 
 SUMMARY_METRIC_COLUMNS = [
     "total_return",
@@ -194,6 +201,16 @@ class ObjectiveSpec:
             raise TypeError("ObjectiveSpec.evaluator must be callable")
 
 
+@dataclass(slots=True, frozen=True)
+class RunDataSpec:
+    """One concrete train or evaluation data bundle for run_backtest()."""
+
+    csv_path: str | None = None
+    dataframe: pd.DataFrame | None = None
+    context_data: dict[str, str | Path | pd.DataFrame] = field(default_factory=dict)
+    conversion_data: dict[str, str | Path | pd.DataFrame] = field(default_factory=dict)
+
+
 @dataclass(slots=True)
 class OptimizationTrial:
     """One normalized optimization trial record."""
@@ -215,6 +232,8 @@ class OptimizationTrial:
     error: str | None = None
     result: BacktestResult | None = None
     cache_hit: bool = False
+    objective_score_source: ScoreSource = "in_sample"
+    search_objective_score: float | None = None
 
     def __post_init__(self) -> None:
         normalized = tuple(str(item) for item in self.timeframes if str(item))
@@ -237,6 +256,8 @@ class OptimizationTrial:
             "objective_metric": self.objective_metric,
             "objective_direction": self.objective_direction,
             "objective_score": self.objective_score,
+            "objective_score_source": self.objective_score_source,
+            "search_objective_score": self.search_objective_score,
             "warning_count": self.warning_count,
             "error": self.error,
         }
@@ -287,6 +308,8 @@ TRIAL_TABLE_COLUMNS = [
     "objective_metric",
     "objective_direction",
     "objective_score",
+    "objective_score_source",
+    "search_objective_score",
     *SUMMARY_METRIC_COLUMNS,
     "warning_count",
     "error",
@@ -304,6 +327,7 @@ class OptimizationResult:
     trials: list[OptimizationTrial] = field(default_factory=list)
     warnings: list[OptimizationWarning] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
+    ranking_score_source: ScoreSource = "in_sample"
 
     def table(self) -> pd.DataFrame:
         if not self.trials:
@@ -311,7 +335,13 @@ class OptimizationResult:
         records = [trial.to_record() for trial in self.trials]
         return pd.DataFrame.from_records(records, columns=TRIAL_TABLE_COLUMNS)
 
-    def ranking(self, *, include_invalid: bool = False) -> pd.DataFrame:
+    def ranking(
+        self,
+        *,
+        include_invalid: bool = False,
+        allow_in_sample: bool = False,
+    ) -> pd.DataFrame:
+        self._require_rankable(allow_in_sample=allow_in_sample)
         table = self.table()
         if not include_invalid:
             table = table.loc[table["status"] == "completed"].copy()
@@ -330,7 +360,8 @@ class OptimizationResult:
         ranked.insert(0, "rank", range(1, len(ranked) + 1))
         return ranked
 
-    def best_trial(self) -> OptimizationTrial:
+    def best_trial(self, *, allow_in_sample: bool = False) -> OptimizationTrial:
+        self._require_rankable(allow_in_sample=allow_in_sample)
         completed = [trial for trial in self.trials if trial.status == "completed"]
         if not completed:
             raise ValueError("No completed optimization trials are available")
@@ -339,11 +370,23 @@ class OptimizationResult:
             return max(completed, key=lambda trial: (trial.objective_score, -trial.run_id))
         return min(completed, key=lambda trial: (trial.objective_score, trial.run_id))
 
-    def best_result(self) -> BacktestResult:
-        best = self.best_trial()
+    def best_result(self, *, allow_in_sample: bool = False) -> BacktestResult:
+        best = self.best_trial(allow_in_sample=allow_in_sample)
         if best.result is None:
             raise ValueError("The best trial does not include a completed backtest result")
         return best.result
+
+    def can_rank_out_of_sample(self) -> bool:
+        return self.ranking_score_source == "out_of_sample"
+
+    def _require_rankable(self, *, allow_in_sample: bool) -> None:
+        if self.can_rank_out_of_sample() or allow_in_sample:
+            return
+        raise ValueError(
+            "Optimization ranking requires out-of-sample evaluation. "
+            "Use holdout_fraction or evaluation_* inputs, or pass allow_in_sample=True "
+            "only for diagnostic inspection."
+        )
 
 
 def resolve_objective_spec(objective: str | ObjectiveSpec) -> ObjectiveSpec:
@@ -541,6 +584,12 @@ class _OptimizationSession:
         csv_path: str | None,
         dataframe: pd.DataFrame | None,
         context_data: dict[str, str | Path | pd.DataFrame] | None,
+        conversion_data: dict[str, str | Path | pd.DataFrame] | None,
+        evaluation_csv_path: str | None,
+        evaluation_dataframe: pd.DataFrame | None,
+        evaluation_context_data: dict[str, str | Path | pd.DataFrame] | None,
+        evaluation_conversion_data: dict[str, str | Path | pd.DataFrame] | None,
+        holdout_fraction: float | None,
         cash: float,
         config: BacktestConfig | None,
         fixed_params: dict[str, Any] | None,
@@ -558,16 +607,28 @@ class _OptimizationSession:
         self.optimizer_name = optimizer_name
         self.strategy_class = strategy_class
         self.instrument = instrument
-        self.timeframe = timeframe
-        self.csv_path = csv_path
-        self.dataframe = dataframe
-        self.context_data = dict(context_data or {})
+        self.timeframe = _normalize_timeframe_label(timeframe)
         self.cash = float(cash)
         self.config = config
         self.search_space = normalize_search_space(search_space)
         self.fixed_params = validate_fixed_params(fixed_params, self.search_space)
         self.objective = resolve_objective_spec(objective)
         self.constraint = constraint
+        self._search_data, self._evaluation_data, self._ranking_score_source, self._evaluation_mode = (
+            _build_optimization_data_specs(
+                timeframe=self.timeframe,
+                csv_path=csv_path,
+                dataframe=dataframe,
+                context_data=context_data,
+                conversion_data=conversion_data,
+                evaluation_csv_path=evaluation_csv_path,
+                evaluation_dataframe=evaluation_dataframe,
+                evaluation_context_data=evaluation_context_data,
+                evaluation_conversion_data=evaluation_conversion_data,
+                holdout_fraction=holdout_fraction,
+                allow_dedupe=(config.allow_dedupe if config is not None else False),
+            )
+        )
         self.trials: list[OptimizationTrial] = []
         self._trial_cache: dict[str, OptimizationTrial] = {}
         self._valid_unique_trials = 0
@@ -655,11 +716,16 @@ class _OptimizationSession:
         return self._snapshot_result()
 
     def objective_value_for_minimize(self, trial: OptimizationTrial) -> float:
-        if trial.status != "completed" or trial.objective_score is None:
+        search_score = (
+            trial.search_objective_score
+            if trial.search_objective_score is not None
+            else trial.objective_score
+        )
+        if trial.status != "completed" or search_score is None:
             return INVALID_OBJECTIVE_PENALTY
         if self.objective.direction == "maximize":
-            return -float(trial.objective_score)
-        return float(trial.objective_score)
+            return -float(search_score)
+        return float(search_score)
 
     def _after_trial_recorded(self, trial: OptimizationTrial) -> None:
         if self._data_bars is None and trial.result is not None:
@@ -724,6 +790,7 @@ class _OptimizationSession:
             trials=list(self.trials),
             warnings=self._warnings(),
             metadata=self._metadata(),
+            ranking_score_source=self._ranking_score_source,
         )
 
     def _warnings(self) -> list[OptimizationWarning]:
@@ -755,6 +822,9 @@ class _OptimizationSession:
             "target_evaluations": self._target_evaluations,
             "stopped_early": self._stop_requested,
             "stop_reason": self._stop_reason,
+            "ranking_score_source": self._ranking_score_source,
+            "evaluation_mode": self._evaluation_mode,
+            "ranking_available": self._ranking_score_source == "out_of_sample",
         }
 
     def _progress_snapshot(self) -> OptimizationProgress:
@@ -808,28 +878,29 @@ class _OptimizationSession:
                 )
 
         try:
-            result = run_backtest(
+            search_result = run_backtest(
                 strategy_class=self.strategy_class,
                 instrument=self.instrument,
                 timeframe=self.timeframe,
-                csv_path=self.csv_path,
-                dataframe=self.dataframe,
-                context_data=self.context_data,
+                csv_path=self._search_data.csv_path,
+                dataframe=self._search_data.dataframe,
+                context_data=self._search_data.context_data,
+                conversion_data=self._search_data.conversion_data,
                 cash=self.cash,
                 strategy_params=parameters,
                 config=self.config,
             )
-            analyzer = PerformanceAnalyzer(result)
-            metric_values = analyzer.metrics.to_dict()
-            objective_score = self._evaluate_objective(
-                result=result,
-                analyzer=analyzer,
-                metrics=analyzer.metrics,
-                metric_values=metric_values,
+            search_analyzer = PerformanceAnalyzer(search_result)
+            search_metric_values = search_analyzer.metrics.to_dict()
+            search_objective_score = self._evaluate_objective(
+                result=search_result,
+                analyzer=search_analyzer,
+                metrics=search_analyzer.metrics,
+                metric_values=search_metric_values,
                 parameters=parameters,
             )
-            if objective_score is None:
-                skipped = analyzer.metrics.skipped_metrics()
+            if search_objective_score is None:
+                skipped = search_analyzer.metrics.skipped_metrics()
                 reason = skipped.get(
                     self.objective.metric_name or "",
                     "objective_score_not_finite",
@@ -838,10 +909,62 @@ class _OptimizationSession:
                     parameters,
                     strategy_name,
                     error=reason,
-                    result=result,
-                    metrics=metric_values,
-                    warning_count=len(analyzer.warnings()),
+                    result=search_result,
+                    metrics=search_metric_values,
+                    warning_count=len(search_analyzer.warnings()),
                 )
+
+            published_result = search_result
+            published_metrics = search_metric_values
+            published_warning_count = len(search_analyzer.warnings())
+            published_score = search_objective_score
+            objective_score_source: ScoreSource = "in_sample"
+
+            if self._evaluation_data is not None:
+                evaluation_result = run_backtest(
+                    strategy_class=self.strategy_class,
+                    instrument=self.instrument,
+                    timeframe=self.timeframe,
+                    csv_path=self._evaluation_data.csv_path,
+                    dataframe=self._evaluation_data.dataframe,
+                    context_data=self._evaluation_data.context_data,
+                    conversion_data=self._evaluation_data.conversion_data,
+                    cash=self.cash,
+                    strategy_params=parameters,
+                    config=self.config,
+                )
+                evaluation_analyzer = PerformanceAnalyzer(evaluation_result)
+                evaluation_metric_values = evaluation_analyzer.metrics.to_dict()
+                evaluation_score = self._evaluate_objective(
+                    result=evaluation_result,
+                    analyzer=evaluation_analyzer,
+                    metrics=evaluation_analyzer.metrics,
+                    metric_values=evaluation_metric_values,
+                    parameters=parameters,
+                )
+                if evaluation_score is None:
+                    skipped = evaluation_analyzer.metrics.skipped_metrics()
+                    reason = skipped.get(
+                        self.objective.metric_name or "",
+                        "objective_score_not_finite",
+                    )
+                    return self._build_invalid_trial(
+                        parameters,
+                        strategy_name,
+                        error=reason,
+                        result=evaluation_result,
+                        metrics=evaluation_metric_values,
+                        warning_count=len(evaluation_analyzer.warnings()),
+                        search_objective_score=search_objective_score,
+                        objective_score_source="out_of_sample",
+                    )
+
+                published_result = evaluation_result
+                published_metrics = evaluation_metric_values
+                published_warning_count = len(evaluation_analyzer.warnings())
+                published_score = evaluation_score
+                objective_score_source = "out_of_sample"
+
             return OptimizationTrial(
                 run_id=self._next_run_id(),
                 optimizer_name=self.optimizer_name,
@@ -850,16 +973,18 @@ class _OptimizationSession:
                 objective_name=self.objective.name,
                 objective_direction=self.objective.direction,
                 objective_metric=self.objective.metric_name,
-                objective_score=objective_score,
-                strategy_name=result.strategy_name,
+                objective_score=published_score,
+                strategy_name=published_result.strategy_name,
                 instrument=self.instrument,
                 timeframe=self.timeframe,
-                timeframes=tuple(result.timeframes),
-                metrics=dict(metric_values),
-                warning_count=len(analyzer.warnings()),
+                timeframes=tuple(published_result.timeframes),
+                metrics=dict(published_metrics),
+                warning_count=published_warning_count,
                 error=None,
-                result=result,
+                result=published_result,
                 cache_hit=False,
+                objective_score_source=objective_score_source,
+                search_objective_score=search_objective_score,
             )
         except Exception as exc:
             return self._build_failed_trial(parameters, strategy_name, exc)
@@ -900,6 +1025,8 @@ class _OptimizationSession:
         result: BacktestResult | None = None,
         metrics: dict[str, Any] | None = None,
         warning_count: int | None = None,
+        objective_score_source: ScoreSource = "in_sample",
+        search_objective_score: float | None = None,
     ) -> OptimizationTrial:
         return OptimizationTrial(
             run_id=self._next_run_id(),
@@ -919,6 +1046,8 @@ class _OptimizationSession:
             error=error,
             result=result,
             cache_hit=False,
+            objective_score_source=objective_score_source,
+            search_objective_score=search_objective_score,
         )
 
     def _build_failed_trial(
@@ -945,6 +1074,8 @@ class _OptimizationSession:
             error=f"{type(exc).__name__}: {exc}",
             result=None,
             cache_hit=False,
+            objective_score_source=self._ranking_score_source,
+            search_objective_score=None,
         )
 
     def _copy_trial(self, trial: OptimizationTrial, *, cache_hit: bool) -> OptimizationTrial:
@@ -966,6 +1097,8 @@ class _OptimizationSession:
             error=trial.error,
             result=trial.result,
             cache_hit=cache_hit,
+            objective_score_source=trial.objective_score_source,
+            search_objective_score=trial.search_objective_score,
         )
 
     def _merged_parameters(self, search_params: dict[str, Any]) -> dict[str, Any]:
@@ -975,6 +1108,208 @@ class _OptimizationSession:
 
     def _next_run_id(self) -> int:
         return len(self.trials) + 1
+
+
+def _build_optimization_data_specs(
+    *,
+    timeframe: str,
+    csv_path: str | None,
+    dataframe: pd.DataFrame | None,
+    context_data: dict[str, str | Path | pd.DataFrame] | None,
+    conversion_data: dict[str, str | Path | pd.DataFrame] | None,
+    evaluation_csv_path: str | None,
+    evaluation_dataframe: pd.DataFrame | None,
+    evaluation_context_data: dict[str, str | Path | pd.DataFrame] | None,
+    evaluation_conversion_data: dict[str, str | Path | pd.DataFrame] | None,
+    holdout_fraction: float | None,
+    allow_dedupe: bool,
+) -> tuple[RunDataSpec, RunDataSpec | None, ScoreSource, str | None]:
+    if (csv_path is None) == (dataframe is None):
+        raise ValueError("Provide exactly one of csv_path or dataframe")
+
+    search_spec = RunDataSpec(
+        csv_path=csv_path,
+        dataframe=dataframe,
+        context_data=dict(context_data or {}),
+        conversion_data=dict(conversion_data or {}),
+    )
+
+    explicit_evaluation_requested = any(
+        value is not None
+        for value in (
+            evaluation_csv_path,
+            evaluation_dataframe,
+            evaluation_context_data,
+            evaluation_conversion_data,
+        )
+    )
+
+    if holdout_fraction is not None and explicit_evaluation_requested:
+        raise ValueError(
+            "holdout_fraction cannot be combined with explicit evaluation_* inputs"
+        )
+
+    if holdout_fraction is not None:
+        train_spec, evaluation_spec = _build_holdout_data_specs(
+            timeframe=timeframe,
+            csv_path=csv_path,
+            dataframe=dataframe,
+            context_data=context_data,
+            conversion_data=conversion_data,
+            holdout_fraction=holdout_fraction,
+            allow_dedupe=allow_dedupe,
+        )
+        return train_spec, evaluation_spec, "out_of_sample", "contiguous_holdout"
+
+    if explicit_evaluation_requested:
+        if (evaluation_csv_path is None) == (evaluation_dataframe is None):
+            raise ValueError(
+                "Provide exactly one of evaluation_csv_path or evaluation_dataframe "
+                "when evaluation data is configured"
+            )
+        evaluation_spec = RunDataSpec(
+            csv_path=evaluation_csv_path,
+            dataframe=evaluation_dataframe,
+            context_data=dict(evaluation_context_data or {}),
+            conversion_data=dict(evaluation_conversion_data or {}),
+        )
+        return search_spec, evaluation_spec, "out_of_sample", "explicit_evaluation"
+
+    return search_spec, None, "in_sample", None
+
+
+def _build_holdout_data_specs(
+    *,
+    timeframe: str,
+    csv_path: str | None,
+    dataframe: pd.DataFrame | None,
+    context_data: dict[str, str | Path | pd.DataFrame] | None,
+    conversion_data: dict[str, str | Path | pd.DataFrame] | None,
+    holdout_fraction: float,
+    allow_dedupe: bool,
+) -> tuple[RunDataSpec, RunDataSpec]:
+    if holdout_fraction <= 0.0 or holdout_fraction >= 1.0:
+        raise ValueError("holdout_fraction must be between 0 and 1")
+
+    loader = OANDADataLoader(allow_dedupe=allow_dedupe)
+    raw_primary = _load_data_source_dataframe(loader, csv_path=csv_path, dataframe=dataframe)
+    train_primary, evaluation_primary, split_time = _split_holdout_frame(
+        raw_primary,
+        timeframe=timeframe,
+        holdout_fraction=holdout_fraction,
+    )
+
+    train_context: dict[str, pd.DataFrame] = {}
+    evaluation_context: dict[str, pd.DataFrame] = {}
+    for context_timeframe, source in _normalize_context_data(
+        dict(context_data or {}),
+        primary_timeframe=_normalize_timeframe_label(timeframe),
+    ):
+        raw_context = _load_data_source_dataframe(loader, source=source)
+        context_train, context_evaluation = _split_frame_at_time(
+            raw_context,
+            timeframe=context_timeframe,
+            split_time=split_time,
+        )
+        if context_train.empty or context_evaluation.empty:
+            raise ValueError(
+                f"holdout_fraction leaves timeframe {context_timeframe} without both "
+                "train and evaluation context bars"
+            )
+        train_context[context_timeframe] = context_train
+        evaluation_context[context_timeframe] = context_evaluation
+
+    train_conversion: dict[str, pd.DataFrame] = {}
+    evaluation_conversion: dict[str, pd.DataFrame] = {}
+    for raw_instrument, source in dict(conversion_data or {}).items():
+        instrument = str(raw_instrument).strip().upper()
+        if not instrument:
+            raise ValueError("conversion_data instrument keys must be non-empty")
+        raw_conversion = _load_data_source_dataframe(loader, source=source)
+        conversion_train, conversion_evaluation = _split_frame_at_time(
+            raw_conversion,
+            timeframe=timeframe,
+            split_time=split_time,
+        )
+        if conversion_train.empty or conversion_evaluation.empty:
+            raise ValueError(
+                f"holdout_fraction leaves conversion series {instrument} without both "
+                "train and evaluation bars"
+            )
+        train_conversion[instrument] = conversion_train
+        evaluation_conversion[instrument] = conversion_evaluation
+
+    return (
+        RunDataSpec(
+            dataframe=train_primary,
+            context_data=train_context,
+            conversion_data=train_conversion,
+        ),
+        RunDataSpec(
+            dataframe=evaluation_primary,
+            context_data=evaluation_context,
+            conversion_data=evaluation_conversion,
+        ),
+    )
+
+
+def _split_holdout_frame(
+    raw_frame: pd.DataFrame,
+    *,
+    timeframe: str,
+    holdout_fraction: float,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.Timestamp]:
+    normalized = _normalize_backtest_frame(raw_frame, timeframe=timeframe)
+    total_bars = len(normalized)
+    if total_bars < 2:
+        raise ValueError("holdout_fraction requires at least two bars")
+
+    holdout_bars = max(1, int(math.ceil(total_bars * holdout_fraction)))
+    train_bars = total_bars - holdout_bars
+    if train_bars <= 0:
+        raise ValueError("holdout_fraction leaves no training bars")
+
+    split_time = pd.Timestamp(normalized.iloc[train_bars - 1]["bar_end_time"])
+    mask = normalized["bar_end_time"] <= split_time
+    train = raw_frame.iloc[mask.to_numpy()].reset_index(drop=True)
+    evaluation = raw_frame.iloc[(~mask).to_numpy()].reset_index(drop=True)
+    if train.empty or evaluation.empty:
+        raise ValueError("holdout_fraction must leave both train and evaluation bars")
+    return train, evaluation, split_time
+
+
+def _split_frame_at_time(
+    raw_frame: pd.DataFrame,
+    *,
+    timeframe: str,
+    split_time: pd.Timestamp,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    normalized = _normalize_backtest_frame(raw_frame, timeframe=timeframe)
+    mask = normalized["bar_end_time"] <= split_time
+    train = raw_frame.iloc[mask.to_numpy()].reset_index(drop=True)
+    evaluation = raw_frame.iloc[(~mask).to_numpy()].reset_index(drop=True)
+    return train, evaluation
+
+
+def _load_data_source_dataframe(
+    loader: OANDADataLoader,
+    *,
+    csv_path: str | None = None,
+    dataframe: pd.DataFrame | None = None,
+    source: str | Path | pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    if source is not None:
+        if isinstance(source, pd.DataFrame):
+            return loader.load_dataframe(source)
+        if isinstance(source, (str, Path)):
+            return loader.load_csv(str(source))
+        raise TypeError("Optimization data sources must be CSV paths or pandas DataFrames")
+
+    if (csv_path is None) == (dataframe is None):
+        raise ValueError("Provide exactly one of csv_path or dataframe")
+    if csv_path is not None:
+        return loader.load_csv(csv_path)
+    return loader.load_dataframe(dataframe)
 
 
 def _normalize_interval(
