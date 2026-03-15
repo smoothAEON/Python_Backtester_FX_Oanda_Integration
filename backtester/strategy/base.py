@@ -34,6 +34,8 @@ class BaseStrategy(bt.Strategy):
     Strategies that override ``__init__`` or ``notify_order`` should call ``super()``.
     """
 
+    runtime_contract = "live_safe"
+    runtime_contract_reason: str | None = None
     params = ()
 
     def __init__(self) -> None:
@@ -294,6 +296,7 @@ class BaseStrategy(bt.Strategy):
                 "sizing_raw_size": order.info.get("sizing_raw_size"),
                 "sizing_final_size": order.info.get("sizing_final_size"),
                 "sizing_equity": order.info.get("sizing_equity"),
+                "sizing_entry_price": order.info.get("sizing_entry_price"),
                 "sizing_stop_price": order.info.get("sizing_stop_price"),
                 "sizing_stop_distance": order.info.get("sizing_stop_distance"),
                 "sizing_reason": order.info.get("sizing_reason"),
@@ -446,6 +449,7 @@ class BaseStrategy(bt.Strategy):
             "sizing_raw_size": float(decision.raw_size),
             "sizing_final_size": float(decision.final_size),
             "sizing_equity": float(decision.equity),
+            "sizing_entry_price": float(decision.entry_price),
             "sizing_stop_price": float(decision.stop_price)
             if decision.stop_price is not None
             else None,

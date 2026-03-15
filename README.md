@@ -18,9 +18,10 @@ A deterministic, bid/ask-aware backtesting system built on **backtrader** for OA
 - **Bid/ask-aware execution**: buys fill on ask candles, sells fill on bid candles.
 - **14-column candle contract**: strict validation for mid, bid, and ask OHLCV data.
 - **Multi-timeframe support**: same-instrument higher-timeframe context feeds for signal and filter logic.
-- **Indicator library**: TA-Lib wrappers, scipy helpers, and SMC/research helpers; `instrument_api` only exposes the causal/time-safe subset during backtests.
+- **Indicator library**: live-safe TA-Lib/scipy/time-aware helpers in `backtester.indicators`, including causal SMC helpers such as `confirmed_swings` and `CausalICTFibEngine`, plus quarantined research-only helpers in `backtester.indicators.research`.
 - **Position sizing**: fixed-lot, risk-percent, Kelly criterion, and volatility-based sizing.
 - **Optimization**: grid search, random search, and scipy-based optimization with explicit out-of-sample ranking support.
+- **Walk-forward audit CLI**: repo-owned `backtester.walk_forward` runner for the Phase 10 H4 matrix with 960/480/160/160/160 expanding windows, widened grids, sizing validation, and execution anomaly reporting.
 - **Reporting**: JSON, CSV, HTML reports with matplotlib charts.
 - **Rate-limited extraction**: single-instrument and fixed-universe batch CLIs with gap-only date-range fetching, transient retry hardening, and atomic CSV caching.
 
@@ -32,13 +33,13 @@ backtester/                 # backtrader-based backtesting engine
   core/                     #   Cerebro builder, broker, result normalization
   data/                     #   Schema validation, CSV/DataFrame loader, feed
   strategy/                 #   BaseStrategy, signal helpers, instrument API
-  indicators/               #   TA-Lib, scipy, and SMC indicator wrappers
+  indicators/               #   Live-safe indicators plus causal/research SMC helper layers
   sizing/                   #   Pluggable position sizing modules
   performance/              #   Metrics, analysis, and run comparison
   optimization/             #   Grid, random, and scipy optimizers
   reporting/                #   JSON, CSV, HTML, and chart exporters
   examples/                 #   Public example strategies used by the docs
-strategies/                 # Canonical runnable sample strategy library
+strategies/                 # Canonical runnable live-safe strategy library
 tests/                      # pytest suites for backtester and extractor
 plans/                      # Phase plans and progress tracker
 ```
@@ -89,6 +90,14 @@ python -m backtester.run_backtest \
   --strategy-class EmaRsiTrendStrategy
 ```
 
+### Run the Phase 10 walk-forward audit
+
+```bash
+python -m backtester.walk_forward --repo-root .
+```
+
+This runner uses local extractor CSVs only. By default it evaluates only the `live_safe` Phase 10 strategies on `H4` using the last `960` completed bars per instrument, expanding `480/160/160/160` folds, `20000` USD starting cash, and leverage `30`. Legacy research variants remain available under `strategies.research` for offline comparison only. `EmaRsiTrendStrategy` keeps `fixed_units=None` instrument-aware here: `1000.0` on the covered FX pairs and `1.0` on `XAU_USD`.
+
 ### Run tests
 
 ```bash
@@ -136,6 +145,8 @@ print(result.ranking().head())
 ```
 
 `OptimizationResult.ranking()` and `best_trial()` require an out-of-sample score by default. Use `holdout_fraction` or explicit `evaluation_*` inputs for deployable rankings, or pass `allow_in_sample=True` only for diagnostic inspection.
+
+For the built-in Phase 10 expanding-window matrix, use `python -m backtester.walk_forward` instead of an ad hoc temp script.
 
 ## Reporting
 
@@ -191,6 +202,7 @@ See [plans/](plans/) for detailed phase docs and [plans/project_checker.md](plan
 | [Backtester README](backtester/README.md) | Workflow guide, CLI flags, config notes, and component links |
 | [Backtester API Index](backtester/API_INDEX.md) | Public class/function import paths |
 | [Strategy Library README](strategies/README.md) | Canonical runnable sample strategies and real report-export example |
+| [fixbug.md](fixbug.md) | Current integrity memo superseding stale live-safety conclusions in the old audit |
 | [Extractor README](oanda-candle-extractor/README.md) | Extraction usage, rate limiting, and configuration |
 | [Master Plan](plans/backtester_plan.md) | Architecture and dependency plan |
 | [Phase Breakdown](plans/backtester_phases/) | Detailed phase specifications |

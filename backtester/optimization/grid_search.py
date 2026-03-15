@@ -51,6 +51,7 @@ def run_grid_search(
     checkpoint_every: int | None = None,
     checkpoint_callback: CheckpointCallback | None = None,
     early_stop: EarlyStopCallback | None = None,
+    allow_research_only: bool = False,
 ) -> OptimizationResult:
     """Run a deterministic grid search over explicit parameter values."""
 
@@ -82,6 +83,7 @@ def run_grid_search(
         checkpoint_every=checkpoint_every,
         checkpoint_callback=checkpoint_callback,
         early_stop=early_stop,
+        allow_research_only=allow_research_only,
         target_trial_count=None,
         target_evaluations=None,
     )

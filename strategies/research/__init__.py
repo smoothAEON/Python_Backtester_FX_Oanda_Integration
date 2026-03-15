@@ -1,21 +1,13 @@
-"""Canonical runnable strategy library for Phase 10.
-
-This package exports only the public ``live_safe`` strategy surface.
-Legacy research-only variants remain under ``strategies.research``.
-"""
+"""Research-only strategy variants retained for offline comparison."""
 
 from .bollinger_zscore_reversion import BollingerZscoreReversionStrategy
-from .ema_rsi_trend import EmaRsiTrendStrategy
 from .hybrid_regime import HybridRegimeStrategy
 from .ict_ote_sniper import IctOteSniperStrategy
-from .macd_atr_breakout import MacdAtrBreakoutStrategy
 from .smc_pullback import SmcPullbackStrategy
 
 __all__ = [
     "BollingerZscoreReversionStrategy",
-    "EmaRsiTrendStrategy",
     "HybridRegimeStrategy",
     "IctOteSniperStrategy",
-    "MacdAtrBreakoutStrategy",
     "SmcPullbackStrategy",
 ]

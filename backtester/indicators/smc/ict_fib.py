@@ -1,7 +1,7 @@
 """ICT Optimal Trade Entry helper built from shared SMC swings.
 
 Example:
-    >>> from backtester.indicators import ICTFibEngine
+    >>> from backtester.indicators.research import ICTFibEngine
     >>> engine = ICTFibEngine(swing_length=3)
     >>> fib = engine.update(strategy.to_ohlcv_dataframe())
     >>> if fib is not None and fib["direction"] == "up":

@@ -7,11 +7,14 @@ If you are starting from the repo root, read [../README.md](../README.md) first.
 ## What Is Here
 
 - one importable runner: `backtester.run_backtest.run_backtest()`
-- one CLI: `python -m backtester.run_backtest`
+- one importable walk-forward driver: `backtester.walk_forward.run_walk_forward()`
+- two CLIs: `python -m backtester.run_backtest` and `python -m backtester.walk_forward`
 - strict loader and validation support for the extractor's 14-column candle contract
 - bid/ask-aware execution on top of `backtrader`
 - USD-account FX valuation with dynamic quote-to-account conversion and leverage-aware margin usage
-- reusable strategy helpers, built-in indicators, position sizers, performance analysis, optimization, and reporting
+- entry-order sizing ledgers now persist `sizing_entry_price` for risk recomputation and walk-forward audit checks
+- reusable strategy helpers, live-safe indicators, research-only indicator quarantine paths, position sizers, performance analysis, optimization, and reporting
+- a repo-owned Phase 10 walk-forward audit runner with widened grids, expanding windows, and margin-only entry anomaly detection
 - a canonical top-level [`../strategies/`](../strategies/README.md) sample-strategy library
 - a small public [`examples/`](examples/README.md) package kept for secondary docs support
 
@@ -23,7 +26,7 @@ The package does not fetch candles from OANDA directly. Use the extractor first,
 - [core/README.md](core/README.md): broker, execution model, result normalization
 - [data/README.md](data/README.md): schema validation, CSV/DataFrame loading, feed adapter
 - [strategy/README.md](strategy/README.md): `BaseStrategy`, `instrument_api`, signal helpers
-- [indicators/README.md](indicators/README.md): TA-Lib, scipy, and SMC wrappers
+- [indicators/README.md](indicators/README.md): live-safe indicators plus research-only helpers
 - [sizing/README.md](sizing/README.md): fixed-lot, risk-percent, Kelly, volatility sizing
 - [performance/README.md](performance/README.md): metrics, summaries, run comparison
 - [optimization/README.md](optimization/README.md): grid, random, and scipy search
@@ -110,10 +113,11 @@ Feed-derived timestamps in `result.order_ledger`, `result.trade_ledger`, `result
 
 ## CLI Usage
 
-The only backtester CLI today is:
+Current backtester CLIs:
 
 ```powershell
 python -m backtester.run_backtest --help
+python -m backtester.walk_forward --help
 ```
 
 Runnable example using the canonical strategy library:
@@ -127,7 +131,7 @@ python -m backtester.run_backtest `
   --strategy-class EmaRsiTrendStrategy
 ```
 
-Available CLI flags:
+`backtester.run_backtest` flags:
 
 | Flag | Required | Description |
 | ---- | -------- | ----------- |
@@ -138,11 +142,31 @@ Available CLI flags:
 | `--strategy-class` | yes | Strategy class name inside that module |
 | `--cash` | no | Starting account value. Default: `10000.0` |
 | `--strategy-param` | no | Repeatable `key=value` strategy parameter override |
+| `--allow-research-only` | no | Allow strategies marked `research_only` for offline research runs |
+
+Phase 10 walk-forward audit example:
+
+```powershell
+python -m backtester.walk_forward --repo-root .
+```
+
+`backtester.walk_forward` flags:
+
+| Flag | Required | Description |
+| ---- | -------- | ----------- |
+| `--repo-root` | no | Repo root used to locate local extractor CSVs under `oanda-candle-extractor/data` |
+| `--output-text` | no | Path for the plain-text run log |
+| `--output-json` | no | Path for the JSON summary payload |
+| `--output-audit` | no | Path for the markdown audit report |
+| `--cash` | no | Starting account value. Default: `20000.0` |
+| `--leverage` | no | Broker leverage. Default: `30.0` |
 
 Notes:
 
-- only `backtester.run_backtest` has CLI flags today
-- optimization, reporting, indicators, performance, sizing, and data helpers are library-only
+- `backtester.walk_forward` defaults to `H4`, the last `960` completed bars per instrument, expanding `480/160/160/160` folds, and out-of-sample `total_return` ranking
+- the default walk-forward matrix includes only `live_safe` strategies
+- the walk-forward runner widens the Phase 10 grids to reduce non-informative ties in the optimization stage
+- optimization, reporting, indicators, performance, sizing, and data helpers beyond these two entry points are still library-only
 - multi-timeframe support remains programmatic only
 
 ## Configuration Surfaces
@@ -206,7 +230,7 @@ Key rules:
 - higher-timeframe rows become visible only after that higher-timeframe bar has completed
 - the CLI does not expose `context_data`
 
-`BaseStrategy.instrument_api` only exposes the runtime-safe indicator subset. Repainting helpers such as `savgol_smooth`, `swing_highs_lows`, `bos_choch`, `ob`, `liquidity`, `premium_discount`, `retracements`, and `ICTFibEngine` remain importable from `backtester.indicators` for offline research, but are rejected through `instrument_api`.
+`BaseStrategy.instrument_api` only exposes the runtime-safe indicator subset. That now includes the causal SMC helper layer (`confirmed_swings`, `confirmed_structure`, `confirmed_order_blocks`, `confirmed_liquidity`, `confirmed_premium_discount`, `confirmed_retracements`) used by the public live-safe strategy library. Research-only helpers such as `savgol_smooth`, `swing_highs_lows`, `bos_choch`, `ob`, `liquidity`, `premium_discount`, `retracements`, and `ICTFibEngine` still live under `backtester.indicators.research` and are rejected from the default runtime contract.
 
 ## Optimization Notes
 
@@ -221,16 +245,25 @@ Key rules:
 
 The canonical runnable showcase strategies live in [`../strategies/`](../strategies/README.md).
 
-They currently provide:
+`live_safe` defaults:
 
-- `EmaRsiTrendStrategy`
-- `MacdAtrBreakoutStrategy`
 - `BollingerZscoreReversionStrategy`
-- `SmcPullbackStrategy`
-- `IctOteSniperStrategy`
+- `EmaRsiTrendStrategy`
 - `HybridRegimeStrategy`
+- `IctOteSniperStrategy`
+- `MacdAtrBreakoutStrategy`
+- `SmcPullbackStrategy`
+
+`research_only` strategies, excluded from the default walk-forward audit and rejected by `run_backtest()` unless `--allow-research-only` or `allow_research_only=True` is set:
+
+- `strategies.research.BollingerZscoreReversionStrategy`
+- `strategies.research.SmcPullbackStrategy`
+- `strategies.research.IctOteSniperStrategy`
+- `strategies.research.HybridRegimeStrategy`
 
 Use `--strategy-module strategies.<module>` for the normal CLI path.
+
+`EmaRsiTrendStrategy` resolves `fixed_units=None` by instrument: `1000.0` for the covered FX pairs and `1.0` for `XAU_USD`. Explicit numeric `fixed_units` overrides still win unchanged.
 
 ## Examples Package
 
@@ -251,4 +284,5 @@ From the repo root:
 ```powershell
 python -m pytest tests\backtester -q
 python -m backtester.run_backtest --help
+python -m backtester.walk_forward --help
 ```

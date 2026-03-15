@@ -12,9 +12,9 @@ from backtester.indicators import (
     rolling_linreg_slope,
     rolling_zscore,
     rsi,
-    savgol_smooth,
     sma,
 )
+from backtester.indicators.research import savgol_smooth
 from backtester.strategy import (
     candle_closes_above_level,
     candle_closes_below_level,

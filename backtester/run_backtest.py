@@ -18,6 +18,7 @@ from .core.fx_conversion import QuoteConversionBook
 from .core.result import BacktestResult, build_backtest_result
 from .data.loader import OANDADataLoader
 from .data.oanda_feed import OANDABidAskData
+from .strategy.safety import validate_strategy_class
 
 _TIMEFRAME_SECONDS = {
     "S5": 5,
@@ -46,11 +47,13 @@ def run_backtest(
     cash: float = 10_000.0,
     strategy_params: dict[str, Any] | None = None,
     config: BacktestConfig | None = None,
+    allow_research_only: bool = False,
 ) -> BacktestResult:
     """Run one strategy on one instrument and return a normalized result."""
 
     if (csv_path is None) == (dataframe is None):
         raise ValueError("Provide exactly one of csv_path or dataframe")
+    validate_strategy_class(strategy_class, allow_research_only=allow_research_only)
 
     primary_timeframe = _normalize_timeframe_label(timeframe)
     instrument_spec = resolve_instrument_spec(instrument)
@@ -138,6 +141,7 @@ def main() -> int:
         csv_path=args.csv_path,
         cash=args.cash,
         strategy_params=strategy_params,
+        allow_research_only=bool(args.allow_research_only),
     )
 
     print(f"strategy={result.strategy_name}")
@@ -159,6 +163,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--strategy-module", required=True, help="Import path for the strategy module")
     parser.add_argument("--strategy-class", required=True, help="Strategy class name within the module")
     parser.add_argument("--cash", type=float, default=10_000.0, help="Starting cash")
+    parser.add_argument(
+        "--allow-research-only",
+        action="store_true",
+        help="Allow strategies marked research_only for offline research runs.",
+    )
     parser.add_argument(
         "--strategy-param",
         action="append",

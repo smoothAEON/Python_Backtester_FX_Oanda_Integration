@@ -3,7 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from backtester.indicators import ICTFibEngine
+from backtester.indicators.research import ICTFibEngine
 
 
 def _make_frame(
@@ -215,4 +215,3 @@ def test_ict_fib_optional_atr_filter_skips_small_swings_without_retrying_same_pa
     assert handled_signature is not None
     assert engine.last_fib_signature is None
     assert engine.last_handled_pair_signature == ((1, 1, 10.2), (2, -1, 10.0))
-

@@ -3,18 +3,26 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from backtester.indicators import ema, premium_discount, swing_highs_lows
+from backtester.indicators import ema
+from backtester.indicators.research import premium_discount, swing_highs_lows
 from backtester.run_backtest import run_backtest
 from backtester.strategy import BaseStrategy, crossed_above
 
 
-def _run(strategy_class, frame: pd.DataFrame, *, cash: float = 10_000.0):
+def _run(
+    strategy_class,
+    frame: pd.DataFrame,
+    *,
+    cash: float = 10_000.0,
+    allow_research_only: bool = False,
+):
     return run_backtest(
         strategy_class,
         instrument="XAU_USD",
         timeframe="H1",
         dataframe=frame,
         cash=cash,
+        allow_research_only=allow_research_only,
     )
 
 
@@ -26,6 +34,15 @@ def _latest_status_for_role(history: list[dict], role: str) -> str:
     matching = [event for event in history if event["role"] == role]
     assert matching
     return matching[-1]["status_name"]
+
+
+def _final_statuses_for_role(result, role: str) -> list[str]:
+    role_rows = result.order_ledger[result.order_ledger["role"] == role]
+    if role_rows.empty:
+        return []
+    ordered = role_rows.reset_index(drop=True)
+    final_rows = ordered.groupby("ref", sort=False).tail(1)
+    return list(final_rows["status_name"])
 
 
 class AccessorStrategy(BaseStrategy):
@@ -108,6 +125,38 @@ class CancelPendingStrategy(BaseStrategy):
         }
 
 
+class CancelAndRetryNextBarStrategy(BaseStrategy):
+    def __init__(self):
+        super().__init__()
+        self._pending_entry_bar: int | None = None
+
+    def next(self):
+        if self._cancel_stale_entry():
+            return
+        if self.has_open_order() or not self.is_flat():
+            return
+
+        if len(self) == 1:
+            self.submit_long_limit(price=95.0, size=1)
+            self._pending_entry_bar = len(self)
+            return
+
+        if len(self) == 3:
+            self.submit_short_market(size=1)
+
+    def _cancel_stale_entry(self) -> bool:
+        if not self.has_open_order():
+            self._pending_entry_bar = None
+            return False
+        if self._pending_entry_bar is None:
+            return False
+        if len(self) - self._pending_entry_bar >= 1:
+            self.cancel_open_orders()
+            self._pending_entry_bar = None
+            return True
+        return False
+
+
 class MarginCleanupStrategy(BaseStrategy):
     history: list[dict] = []
     final_state: dict[str, bool] = {}
@@ -125,6 +174,9 @@ class MarginCleanupStrategy(BaseStrategy):
 
 
 class Phase2SmokeStrategy(BaseStrategy):
+    runtime_contract = "research_only"
+    runtime_contract_reason = "Phase 2 smoke test intentionally exercises research-only helpers."
+
     def next(self):
         frame = self.to_ohlcv_dataframe()
         if len(frame) < 6 or self.has_open_order() or not self.is_flat():
@@ -319,6 +371,30 @@ def test_base_strategy_cleans_up_after_canceled_pending_orders(make_oanda_frame)
     }
 
 
+def test_pending_entry_strategies_can_retry_on_a_later_bar_after_stale_cancel(
+    make_oanda_frame,
+):
+    frame = make_oanda_frame(
+        [
+            {"open": 100.0, "high": 100.2, "low": 99.8, "close": 100.0},
+            {"open": 100.2, "high": 100.4, "low": 100.1, "close": 100.3},
+            {"open": 100.3, "high": 100.5, "low": 100.2, "close": 100.4},
+            {"open": 100.1, "high": 100.3, "low": 99.9, "close": 100.0},
+            {"open": 99.9, "high": 100.0, "low": 99.7, "close": 99.8},
+        ]
+    )
+
+    result = _run(CancelAndRetryNextBarStrategy, frame)
+
+    assert _final_statuses_for_role(result, "entry") == ["Canceled", "Completed"]
+    entry_events = result.order_ledger[result.order_ledger["role"] == "entry"]
+    completed_entry = entry_events.loc[entry_events["status_name"] == "Completed"].iloc[-1]
+    stale_cancel_bar_end = pd.Timestamp(frame.iloc[1]["time"]).tz_convert("UTC") + pd.Timedelta(
+        hours=1
+    )
+    assert pd.Timestamp(completed_entry["created_time"]) > stale_cancel_bar_end
+
+
 def test_base_strategy_cleans_up_after_margin_rejection(make_oanda_frame):
     MarginCleanupStrategy.history = []
     MarginCleanupStrategy.final_state = {}
@@ -353,7 +429,11 @@ def test_phase2_smoke_strategy_runs_with_talib_and_smc(make_oanda_frame):
         ]
     )
 
-    result = _run(Phase2SmokeStrategy, frame)
+    result = _run(
+        Phase2SmokeStrategy,
+        frame,
+        allow_research_only=True,
+    )
 
     assert not result.order_ledger.empty
     assert not result.trade_ledger.empty

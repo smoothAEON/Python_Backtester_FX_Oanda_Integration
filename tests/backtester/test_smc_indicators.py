@@ -11,9 +11,8 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from backtester.indicators import (
+from backtester.indicators.research import (
     bos_choch,
-
     liquidity,
     ob,
     premium_discount,

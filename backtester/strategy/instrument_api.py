@@ -217,7 +217,7 @@ class InstrumentRuntime:
         if normalized_name in self._UNSAFE_INDICATORS:
             raise ValueError(
                 f"{normalized_name} is unavailable through instrument_api because it is "
-                "unsafe/repainting in live-like backtests; use backtester.indicators "
+                "unsafe/repainting in live-like backtests; use backtester.indicators.research "
                 "directly for offline research only"
             )
 
@@ -265,45 +265,6 @@ class InstrumentRuntime:
         if name == "adx":
             self._reject_source(name, source)
             return adx(frame["high"], frame["low"], frame["close"], **params)
-        if name == "swing_highs_lows":
-            self._reject_source(name, source)
-            return _smc_exports()["swing_highs_lows"](frame, **params)
-        if name == "bos_choch":
-            self._reject_source(name, source)
-            params, swing_params = self._split_swing_params(params)
-            swings = self._indicator_result(timeframe, "swing_highs_lows", None, swing_params)
-            if not isinstance(swings, pd.DataFrame):
-                raise TypeError("swing_highs_lows must resolve to a DataFrame")
-            return _smc_exports()["bos_choch"](frame, swings, **params)
-        if name == "ob":
-            self._reject_source(name, source)
-            params, swing_params = self._split_swing_params(params)
-            swings = self._indicator_result(timeframe, "swing_highs_lows", None, swing_params)
-            if not isinstance(swings, pd.DataFrame):
-                raise TypeError("swing_highs_lows must resolve to a DataFrame")
-            return _smc_exports()["ob"](frame, swings, **params)
-        if name == "liquidity":
-            self._reject_source(name, source)
-            params, swing_params = self._split_swing_params(params)
-            swings = self._indicator_result(timeframe, "swing_highs_lows", None, swing_params)
-            if not isinstance(swings, pd.DataFrame):
-                raise TypeError("swing_highs_lows must resolve to a DataFrame")
-            return _smc_exports()["liquidity"](frame, swings, **params)
-        if name == "premium_discount":
-            self._reject_source(name, source)
-            params, swing_params = self._split_swing_params(params)
-            swings = self._indicator_result(timeframe, "swing_highs_lows", None, swing_params)
-            if not isinstance(swings, pd.DataFrame):
-                raise TypeError("swing_highs_lows must resolve to a DataFrame")
-            return _smc_exports()["premium_discount"](frame, swings, **params)
-        if name == "ict_fib":
-            self._reject_source(name, source)
-            if "swing_length" not in params and not (
-                {"left_bars", "right_bars"} & set(params)
-            ):
-                raise ValueError("ict_fib requires explicit swing_length")
-            engine = _smc_exports()["ICTFibEngine"](**params)
-            return engine.update(frame)
 
         if name == "previous_high_low":
             self._reject_source(name, source)
@@ -311,13 +272,40 @@ class InstrumentRuntime:
         if name == "sessions":
             self._reject_source(name, source)
             return _smc_exports()["sessions"](frame, **params)
-        if name == "retracements":
+        if name == "confirmed_swings":
             self._reject_source(name, source)
-            params, swing_params = self._split_swing_params(params)
-            swings = self._indicator_result(timeframe, "swing_highs_lows", None, swing_params)
-            if not isinstance(swings, pd.DataFrame):
-                raise TypeError("swing_highs_lows must resolve to a DataFrame")
-            return _smc_exports()["retracements"](frame, swings, **params)
+            return _causal_smc_exports()["confirmed_swings"](frame, **params)
+        if name == "confirmed_structure":
+            self._reject_source(name, source)
+            remaining, swing_params = self._split_swing_params(params)
+            swings = _causal_smc_exports()["confirmed_swings"](frame, **swing_params)
+            return _causal_smc_exports()["confirmed_structure"](frame, swings, **remaining)
+        if name == "confirmed_order_blocks":
+            self._reject_source(name, source)
+            remaining, swing_params = self._split_swing_params(params)
+            structure_params = self._pop_dict_param(remaining, "structure_params")
+            swings = _causal_smc_exports()["confirmed_swings"](frame, **swing_params)
+            structure = _causal_smc_exports()["confirmed_structure"](
+                frame,
+                swings,
+                **structure_params,
+            )
+            return _causal_smc_exports()["confirmed_order_blocks"](frame, structure, **remaining)
+        if name == "confirmed_liquidity":
+            self._reject_source(name, source)
+            remaining, swing_params = self._split_swing_params(params)
+            swings = _causal_smc_exports()["confirmed_swings"](frame, **swing_params)
+            return _causal_smc_exports()["confirmed_liquidity"](frame, swings, **remaining)
+        if name == "confirmed_premium_discount":
+            self._reject_source(name, source)
+            remaining, swing_params = self._split_swing_params(params)
+            swings = _causal_smc_exports()["confirmed_swings"](frame, **swing_params)
+            return _causal_smc_exports()["confirmed_premium_discount"](frame, swings, **remaining)
+        if name == "confirmed_retracements":
+            self._reject_source(name, source)
+            remaining, swing_params = self._split_swing_params(params)
+            swings = _causal_smc_exports()["confirmed_swings"](frame, **swing_params)
+            return _causal_smc_exports()["confirmed_retracements"](frame, swings, **remaining)
 
         raise ValueError(f"Unknown built-in indicator: {name!r}")
 
@@ -410,6 +398,14 @@ class InstrumentRuntime:
         if source is not None:
             raise ValueError(f"{name} does not accept a source parameter")
 
+    def _pop_dict_param(self, params: dict[str, Any], key: str) -> dict[str, Any]:
+        raw_value = params.pop(key, None)
+        if raw_value is None:
+            return {}
+        if not isinstance(raw_value, dict):
+            raise TypeError(f"{key} must be a dict when provided")
+        return dict(raw_value)
+
     def _reset_bar_local_memo(self) -> None:
         current_bar = len(self._strategy)
         if self._memo_bar != current_bar:
@@ -468,25 +464,32 @@ def _stable_value(value: Any) -> Any:
 @lru_cache(maxsize=1)
 def _smc_exports() -> dict[str, Any]:
     from backtester.indicators import (
-        ICTFibEngine,
-        bos_choch,
-        liquidity,
-        ob,
-        premium_discount,
         previous_high_low,
-        retracements,
         sessions,
-        swing_highs_lows,
     )
 
     return {
-        "ICTFibEngine": ICTFibEngine,
-        "bos_choch": bos_choch,
-        "liquidity": liquidity,
-        "ob": ob,
-        "premium_discount": premium_discount,
         "previous_high_low": previous_high_low,
-        "retracements": retracements,
         "sessions": sessions,
-        "swing_highs_lows": swing_highs_lows,
+    }
+
+
+@lru_cache(maxsize=1)
+def _causal_smc_exports() -> dict[str, Any]:
+    from backtester.indicators import (
+        confirmed_liquidity,
+        confirmed_order_blocks,
+        confirmed_premium_discount,
+        confirmed_retracements,
+        confirmed_structure,
+        confirmed_swings,
+    )
+
+    return {
+        "confirmed_liquidity": confirmed_liquidity,
+        "confirmed_order_blocks": confirmed_order_blocks,
+        "confirmed_premium_discount": confirmed_premium_discount,
+        "confirmed_retracements": confirmed_retracements,
+        "confirmed_structure": confirmed_structure,
+        "confirmed_swings": confirmed_swings,
     }

@@ -58,6 +58,7 @@ def run_scipy_optimization(
     checkpoint_every: int | None = None,
     checkpoint_callback: CheckpointCallback | None = None,
     early_stop: EarlyStopCallback | None = None,
+    allow_research_only: bool = False,
 ) -> OptimizationResult:
     """Run bounded scipy optimization and record every evaluated point."""
 
@@ -89,6 +90,7 @@ def run_scipy_optimization(
         checkpoint_every=checkpoint_every,
         checkpoint_callback=checkpoint_callback,
         early_stop=early_stop,
+        allow_research_only=allow_research_only,
         target_trial_count=None,
         target_evaluations=max_evaluations,
     )

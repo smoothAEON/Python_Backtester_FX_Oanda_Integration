@@ -2,16 +2,27 @@
 
 ## Purpose
 
-`strategies/` is the canonical runnable sample-strategy library for this repo. These strategies are showcase and coverage vehicles for the backtester surface. They are meant to demonstrate the execution, indicator, sizing, optimization, and reporting layers together rather than act as profit-seeking defaults.
+`strategies/` is the canonical runnable sample-strategy library for this repo. These strategies are showcase and coverage vehicles for the backtester surface, and this package now exports only the public `live_safe` variants.
 
 ## Available Strategies
 
-- `EmaRsiTrendStrategy`
-- `MacdAtrBreakoutStrategy`
+`live_safe`:
+
 - `BollingerZscoreReversionStrategy`
-- `SmcPullbackStrategy`
-- `IctOteSniperStrategy`
+- `EmaRsiTrendStrategy`
 - `HybridRegimeStrategy`
+- `IctOteSniperStrategy`
+- `MacdAtrBreakoutStrategy`
+- `SmcPullbackStrategy`
+
+`research_only`:
+
+- `strategies.research.BollingerZscoreReversionStrategy`
+- `strategies.research.SmcPullbackStrategy`
+- `strategies.research.IctOteSniperStrategy`
+- `strategies.research.HybridRegimeStrategy`
+
+The default `python -m backtester.walk_forward` audit matrix includes only the `live_safe` strategies. `run_backtest()` rejects `research_only` strategies unless you pass `--allow-research-only` or `allow_research_only=True`. Use `strategies.research` only for offline comparison against the preserved pre-rewrite implementations.
 
 ## CLI Example
 

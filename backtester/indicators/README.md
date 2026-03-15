@@ -2,19 +2,18 @@
 
 ## Purpose
 
-`backtester.indicators` wraps TA-Lib, scipy, and Smart Money Concepts helpers behind one import surface. TA-Lib and scipy wrappers are imported eagerly. SMC-backed helpers are loaded lazily when first used.
+`backtester.indicators` is the live-safe indicator namespace. It exposes TA-Lib wrappers, safe scipy helpers, and causal SMC helpers that remain valid inside the runtime contract. Research-only helpers live in `backtester.indicators.research`.
 
 ## Main Public APIs
 
-- TA-Lib wrappers: `sma`, `ema`, `rsi`, `macd`, `atr`, `bollinger_bands`, `adx`
-- scipy wrappers: `savgol_smooth`, `rolling_linreg_slope`, `rolling_zscore`
-- SMC helpers: `swing_highs_lows`, `bos_choch`, `ob`, `liquidity`, `premium_discount`, `previous_high_low`, `sessions`, `retracements`, `ICTFibEngine`
+- Live-safe exports: `sma`, `ema`, `rsi`, `macd`, `atr`, `bollinger_bands`, `adx`, `rolling_linreg_slope`, `rolling_zscore`, `confirmed_swings`, `confirmed_structure`, `confirmed_order_blocks`, `confirmed_liquidity`, `confirmed_premium_discount`, `confirmed_retracements`, `CausalICTFibEngine`, `previous_high_low`, `sessions`
+- Research-only exports from `backtester.indicators.research`: `savgol_smooth`, `swing_highs_lows`, `bos_choch`, `ob`, `liquidity`, `premium_discount`, `retracements`, `ICTFibEngine`
 
 ## How To Use It
 
-Use these helpers directly on pandas Series/DataFrames. The direct wrappers are useful for research notebooks, offline analysis, and deterministic unit tests.
+Use `backtester.indicators` directly on pandas Series/DataFrames when you want helpers that remain inside the live-safe runtime contract. Use `backtester.indicators.research` only for offline research and quarantined tests.
 
-`BaseStrategy.instrument_api` exposes only the runtime-safe subset. `savgol_smooth`, `swing_highs_lows`, `bos_choch`, `ob`, `liquidity`, `premium_discount`, `retracements`, and `ICTFibEngine` remain importable here for offline research, but are rejected from `instrument_api` because they repaint or depend on future confirmation. `previous_high_low` and `sessions` remain available through `instrument_api` after the runner normalizes feed time to completed bars.
+`BaseStrategy.instrument_api` exposes only the runtime-safe subset. The causal helpers above remain available through that path. `savgol_smooth`, `swing_highs_lows`, `bos_choch`, `ob`, `liquidity`, `premium_discount`, `retracements`, and `ICTFibEngine` are intentionally excluded because they repaint or depend on future confirmation. `previous_high_low` and `sessions` remain available through `instrument_api` after the runner normalizes feed time to completed bars.
 
 ## Example
 
@@ -34,7 +33,7 @@ print(ema_series.tail(3))
 print(zscore_series.tail(3))
 ```
 
-If you call an SMC helper, `smartmoneyconcepts` will be imported at that point.
+If you call `previous_high_low` or `sessions`, `smartmoneyconcepts` will be imported lazily at that point. The causal helpers are repo-owned and live-safe. Research-only SMC helpers still require `backtester.indicators.research`.
 
 ## Command-Line Flags
 

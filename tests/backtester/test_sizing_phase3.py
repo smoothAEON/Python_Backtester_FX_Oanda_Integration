@@ -459,9 +459,11 @@ def test_entry_sizing_details_are_recorded_and_protective_orders_stay_null(
     assert not protective_events.empty
     assert entry_events["thesis_ref"].notna().all()
     assert entry_events["sizing_equity"].eq(10_000.0).all()
+    assert entry_events["sizing_entry_price"].notna().all()
     assert all(value == pytest.approx(0.8) for value in entry_events["sizing_stop_distance"])
     assert entry_events["sizing_details"].iloc[0]["risk_percent"] == pytest.approx(0.004)
     assert protective_events["sizing_method"].isna().all()
+    assert protective_events["sizing_entry_price"].isna().all()
     assert protective_events["sizing_details"].isna().all()
 
 

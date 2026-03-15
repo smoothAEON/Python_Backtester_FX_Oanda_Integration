@@ -1,10 +1,16 @@
-"""Live-safe hybrid showcase strategy that changes behavior by ADX regime."""
+"""Hybrid showcase strategy that changes behavior by ADX regime."""
 
 from __future__ import annotations
 
 import pandas as pd
 
-from backtester.indicators import confirmed_premium_discount, confirmed_structure, confirmed_swings
+from backtester.indicators import rolling_linreg_slope
+from backtester.indicators.research import (
+    bos_choch,
+    premium_discount,
+    savgol_smooth,
+    swing_highs_lows,
+)
 from backtester.sizing import KellySizer
 from backtester.strategy import (
     is_equilibrium,
@@ -13,18 +19,21 @@ from backtester.strategy import (
     structure_bias,
 )
 
-from ._shared import ShowcaseStrategy, latest_defined_value, latest_value, tail_is_ready
+from .._shared import ShowcaseStrategy, latest_defined_value, latest_value, tail_is_ready
 
 
 class HybridRegimeStrategy(ShowcaseStrategy):
-    """Switch between momentum and equilibrium logic using confirmed live-safe context."""
+    """Switch between momentum and equilibrium logic based on ADX."""
 
-    runtime_contract = "live_safe"
-    runtime_contract_reason = None
+    runtime_contract = "research_only"
+    runtime_contract_reason = (
+        "Uses savgol_smooth and repaint-prone SMC helpers from the research-only indicator surface."
+    )
     params = (
         ("adx_period", 5),
         ("adx_threshold", 10.0),
         ("smoothing_window", 5),
+        ("smoothing_polyorder", 2),
         ("slope_window", 4),
         ("swing_length", 1),
         ("risk_reward", 1.5),
@@ -50,45 +59,49 @@ class HybridRegimeStrategy(ShowcaseStrategy):
             return
 
         frame = self.to_ohlcv_dataframe()
-        if len(frame) < max(8, int(self.p.smoothing_window) + 1):
+        if len(frame) < 8:
             return
 
         adx_values = self.indicator(None, "adx", period=int(self.p.adx_period))
-        slope_values = self.indicator(
-            None,
-            "rolling_linreg_slope",
-            window=int(self.p.slope_window),
+        slope_values = rolling_linreg_slope(frame["close"], window=int(self.p.slope_window))
+        smooth_values = savgol_smooth(
+            frame["close"],
+            window_length=int(self.p.smoothing_window),
+            polyorder=int(self.p.smoothing_polyorder),
         )
-        trend_values = self.indicator(None, "ema", period=int(self.p.smoothing_window))
-        swings = confirmed_swings(frame, swing_length=int(self.p.swing_length))
-        structure = confirmed_structure(frame, swings, close_break=True)
-        zones = confirmed_premium_discount(frame, swings)
+        swings = swing_highs_lows(frame, swing_length=int(self.p.swing_length))
+        structure = bos_choch(frame, swings, close_break=True)
+        zones = premium_discount(frame, swings)
         if not all(
             (
                 tail_is_ready(adx_values, 1),
                 tail_is_ready(slope_values, 1),
-                tail_is_ready(trend_values, 2),
             )
         ):
+            return
+        defined_smooth = smooth_values.dropna()
+        if len(defined_smooth) < 2:
             return
 
         adx_now = latest_value(adx_values)
         slope_now = latest_value(slope_values)
-        trend_prev = latest_value(trend_values, offset=-2)
-        trend_now = latest_value(trend_values)
+        smooth_prev = float(defined_smooth.iloc[-2])
+        smooth_now = latest_defined_value(defined_smooth)
         structure_signal = structure_bias(
             latest_defined_value(structure, "BOS"),
             latest_defined_value(structure, "CHOCH"),
         )
         zone_value = zones["Zone"].iloc[-1] if not pd.isna(zones["Zone"].iloc[-1]) else 0
-        if None in {adx_now, slope_now, trend_prev, trend_now}:
+        if None in {adx_now, slope_now, smooth_prev, smooth_now}:
             return
 
-        trend_up = trend_now > trend_prev
-        trend_down = trend_now < trend_prev
+        trend_up = smooth_now > smooth_prev
+        trend_down = smooth_now < smooth_prev
         bullish_confluence = smc_bullish_confluence(structure_signal, int(zone_value))
         bearish_confluence = smc_bearish_confluence(structure_signal, int(zone_value))
         trending = adx_now >= float(self.p.adx_threshold)
+        long_signal = False
+        short_signal = False
         if trending:
             long_signal = trend_up and slope_now > 0.0 and (
                 bullish_confluence or structure_signal >= 0

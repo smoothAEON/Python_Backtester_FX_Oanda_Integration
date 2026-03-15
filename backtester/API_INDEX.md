@@ -4,7 +4,7 @@ This index maps the current public backtester surfaces to their module paths.
 
 ## Root Package
 
-`run_backtest()` keeps extractor-native inputs unchanged on disk, but normalizes feed and result timestamps to completed-bar time during a run.
+`run_backtest()` keeps extractor-native inputs unchanged on disk, but normalizes feed and result timestamps to completed-bar time during a run. Entry rows in `BacktestResult.order_ledger` also retain sizing metadata, including `sizing_entry_price`, for audit and FX-rate recomputation.
 
 | Symbol | Import Path |
 | ------ | ----------- |
@@ -65,7 +65,7 @@ Relevant current fields: `ExecutionConfig.leverage` controls leveraged notional-
 
 ## Indicators
 
-Direct indicator exports are broader than the strategy runtime surface. Repainting helpers remain importable from `backtester.indicators` for offline analysis, but are not available through `BaseStrategy.instrument_api`.
+`backtester.indicators` is the live-safe indicator surface. Research-only helpers live under `backtester.indicators.research` and are outside the default runtime contract.
 
 | Symbol | Import Path |
 | ------ | ----------- |
@@ -76,18 +76,32 @@ Direct indicator exports are broader than the strategy runtime surface. Repainti
 | `atr` | `backtester.indicators.atr` |
 | `adx` | `backtester.indicators.adx` |
 | `bollinger_bands` | `backtester.indicators.bollinger_bands` |
-| `savgol_smooth` | `backtester.indicators.savgol_smooth` |
 | `rolling_linreg_slope` | `backtester.indicators.rolling_linreg_slope` |
 | `rolling_zscore` | `backtester.indicators.rolling_zscore` |
-| `swing_highs_lows` | `backtester.indicators.swing_highs_lows` |
-| `bos_choch` | `backtester.indicators.bos_choch` |
-| `ob` | `backtester.indicators.ob` |
-| `liquidity` | `backtester.indicators.liquidity` |
-| `premium_discount` | `backtester.indicators.premium_discount` |
+| `confirmed_swings` | `backtester.indicators.confirmed_swings` |
+| `confirmed_structure` | `backtester.indicators.confirmed_structure` |
+| `confirmed_order_blocks` | `backtester.indicators.confirmed_order_blocks` |
+| `confirmed_liquidity` | `backtester.indicators.confirmed_liquidity` |
+| `confirmed_premium_discount` | `backtester.indicators.confirmed_premium_discount` |
+| `confirmed_retracements` | `backtester.indicators.confirmed_retracements` |
+| `CausalICTFibEngine` | `backtester.indicators.CausalICTFibEngine` |
 | `previous_high_low` | `backtester.indicators.previous_high_low` |
 | `sessions` | `backtester.indicators.sessions` |
-| `retracements` | `backtester.indicators.retracements` |
-| `ICTFibEngine` | `backtester.indicators.ICTFibEngine` |
+
+## Research Indicators
+
+These helpers are available for offline research only. Repo-owned strategies that depend on them must be marked `research_only`, and `run_backtest()` rejects them unless `allow_research_only=True`. Preserved research strategies live under `strategies.research`.
+
+| Symbol | Import Path |
+| ------ | ----------- |
+| `savgol_smooth` | `backtester.indicators.research.savgol_smooth` |
+| `swing_highs_lows` | `backtester.indicators.research.swing_highs_lows` |
+| `bos_choch` | `backtester.indicators.research.bos_choch` |
+| `ob` | `backtester.indicators.research.ob` |
+| `liquidity` | `backtester.indicators.research.liquidity` |
+| `premium_discount` | `backtester.indicators.research.premium_discount` |
+| `retracements` | `backtester.indicators.research.retracements` |
+| `ICTFibEngine` | `backtester.indicators.research.ICTFibEngine` |
 
 ## Sizing
 
@@ -125,6 +139,15 @@ Ranked optimization outputs now require an out-of-sample score. Use `holdout_fra
 | `run_grid_search` | `backtester.optimization.run_grid_search` |
 | `run_random_search` | `backtester.optimization.run_random_search` |
 | `run_scipy_optimization` | `backtester.optimization.run_scipy_optimization` |
+
+## Walk-Forward
+
+`python -m backtester.walk_forward` is the repo-owned Phase 10 audit CLI. It defaults to local `H4` data, the last `960` completed bars per instrument, expanding `480/160/160/160` folds, out-of-sample `total_return` ranking, and text/JSON/markdown outputs. The default matrix now includes only strategies marked `live_safe`. The Phase 10 `EmaRsiTrendStrategy` keeps `fixed_units=None` instrument-aware: `1000.0` on the covered FX pairs and `1.0` on `XAU_USD`.
+
+| Symbol | Import Path |
+| ------ | ----------- |
+| `OutputSink` | `backtester.walk_forward.OutputSink` |
+| `run_walk_forward` | `backtester.walk_forward.run_walk_forward` |
 
 ## Reporting
 

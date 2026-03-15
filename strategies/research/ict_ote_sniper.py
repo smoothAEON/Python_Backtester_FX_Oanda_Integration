@@ -1,26 +1,28 @@
-"""Live-safe ICT OTE showcase strategy using confirmed causal fib state."""
+"""ICT OTE showcase strategy using frozen fib state and limit entries."""
 
 from __future__ import annotations
 
 import pandas as pd
 
-from backtester.indicators import (
-    CausalICTFibEngine,
-    confirmed_premium_discount,
-    confirmed_structure,
-    confirmed_swings,
+from backtester.indicators.research import (
+    ICTFibEngine,
+    bos_choch,
+    premium_discount,
+    swing_highs_lows,
 )
 from backtester.sizing import RiskPercentSizer
 from backtester.strategy import is_discount, is_premium, structure_bias
 
-from ._shared import ShowcaseStrategy, latest_defined_value, latest_value, tail_is_ready
+from .._shared import ShowcaseStrategy, latest_defined_value, latest_value, tail_is_ready
 
 
 class IctOteSniperStrategy(ShowcaseStrategy):
-    """Trade one pullback attempt per confirmed causal ICT fib signature."""
+    """Trade one pullback attempt per frozen ICT fib signature."""
 
-    runtime_contract = "live_safe"
-    runtime_contract_reason = None
+    runtime_contract = "research_only"
+    runtime_contract_reason = (
+        "Uses ICTFibEngine and repaint-prone SMC helpers from the research-only indicator surface."
+    )
     params = (
         ("swing_length", 1),
         ("atr_period", 3),
@@ -34,7 +36,7 @@ class IctOteSniperStrategy(ShowcaseStrategy):
     def __init__(self) -> None:
         super().__init__()
         self.position_sizer = RiskPercentSizer(float(self.p.risk_percent))
-        self.fib_engine = CausalICTFibEngine(
+        self.fib_engine = ICTFibEngine(
             swing_length=int(self.p.swing_length),
             atr_period=int(self.p.atr_period),
             atr_multiplier=float(self.p.atr_multiplier),
@@ -49,16 +51,12 @@ class IctOteSniperStrategy(ShowcaseStrategy):
             return
 
         frame = self.to_ohlcv_dataframe()
-        if len(frame) < max(5, (int(self.p.swing_length) * 2) + 2):
+        if len(frame) < 5:
             return
 
         fib = self.fib_engine.update(frame)
         signature = self.fib_engine.last_fib_signature
         if fib is None or signature is None or signature in self._submitted_signatures:
-            return
-
-        current_index = len(frame) - 1
-        if current_index <= int(fib["confirmed_on_idx"]):
             return
 
         atr_values = self.indicator(None, "atr", period=int(self.p.atr_period))
@@ -68,9 +66,9 @@ class IctOteSniperStrategy(ShowcaseStrategy):
         if atr_now is None:
             return
 
-        swings = confirmed_swings(frame, swing_length=int(self.p.swing_length))
-        structure = confirmed_structure(frame, swings, close_break=True)
-        zones = confirmed_premium_discount(frame, swings)
+        swings = swing_highs_lows(frame, swing_length=int(self.p.swing_length))
+        structure = bos_choch(frame, swings, close_break=True)
+        zones = premium_discount(frame, swings)
         structure_signal = structure_bias(
             latest_defined_value(structure, "BOS"),
             latest_defined_value(structure, "CHOCH"),

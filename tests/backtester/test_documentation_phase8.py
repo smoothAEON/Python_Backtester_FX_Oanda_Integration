@@ -14,6 +14,7 @@ REAL_EXTRACTOR_CSV = (
     ROOT / "oanda-candle-extractor" / "data" / "EUR_USD" / "candles_EUR_USD_D.csv"
 )
 DOCUMENTATION_PATHS = [
+    ROOT / "fixbug.md",
     ROOT / "backtester" / "README.md",
     ROOT / "backtester" / "API_INDEX.md",
     ROOT / "backtester" / "core" / "README.md",
@@ -87,6 +88,22 @@ def test_run_backtest_help_cli_succeeds():
     assert "--csv-path" in completed.stdout
     assert "--strategy-module" in completed.stdout
     assert "--strategy-param" in completed.stdout
+    assert "--allow-research-only" in completed.stdout
+
+
+def test_walk_forward_help_cli_succeeds():
+    completed = subprocess.run(
+        [sys.executable, "-m", "backtester.walk_forward", "--help"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert "--repo-root" in completed.stdout
+    assert "--output-json" in completed.stdout
+    assert "--output-audit" in completed.stdout
 
 
 def test_documented_cli_example_runs_against_strategy_library():
@@ -116,3 +133,28 @@ def test_documented_cli_example_runs_against_strategy_library():
     assert "strategy=EmaRsiTrendStrategy" in completed.stdout
     assert "instrument=EUR_USD" in completed.stdout
     assert "timeframe=D" in completed.stdout
+
+
+def test_docs_describe_live_safe_defaults_and_research_only_quarantine():
+    root_readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    backtester_readme = (ROOT / "backtester" / "README.md").read_text(encoding="utf-8")
+    api_index = (ROOT / "backtester" / "API_INDEX.md").read_text(encoding="utf-8")
+    indicators_readme = (ROOT / "backtester" / "indicators" / "README.md").read_text(
+        encoding="utf-8"
+    )
+    strategies_readme = (ROOT / "strategies" / "README.md").read_text(encoding="utf-8")
+    fixbug = (ROOT / "fixbug.md").read_text(encoding="utf-8")
+
+    assert "live_safe" in root_readme
+    assert "fixbug.md" in root_readme
+    assert "--allow-research-only" in backtester_readme
+    assert "default walk-forward matrix includes only `live_safe` strategies" in backtester_readme
+    assert "confirmed_swings" in backtester_readme
+    assert "backtester.indicators.research" in api_index
+    assert "backtester.indicators.savgol_smooth" not in api_index
+    assert "CausalICTFibEngine" in api_index
+    assert "backtester.indicators.research" in indicators_readme
+    assert "confirmed_swings" in indicators_readme
+    assert "`research_only`" in strategies_readme
+    assert "strategies.research" in strategies_readme
+    assert "supersedes the current integrity conclusions" in fixbug

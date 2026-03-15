@@ -25,14 +25,22 @@ class EmaRsiTrendStrategy(ShowcaseStrategy):
         ("rsi_short_threshold", 48.0),
         ("adx_period", 3),
         ("adx_min", 5.0),
-        ("fixed_units", 1_000.0),
+        ("fixed_units", None),
         ("max_hold_bars", 4),
     )
 
     def __init__(self) -> None:
         super().__init__()
-        self.position_sizer = FixedLotSizer(float(self.p.fixed_units))
+        self.position_sizer = FixedLotSizer(self._resolve_fixed_units())
         self._entry_bar: int | None = None
+
+    def _resolve_fixed_units(self) -> float:
+        configured_units = self.p.fixed_units
+        if configured_units is not None:
+            return float(configured_units)
+        if (self.instrument or "").upper() == "XAU_USD":
+            return 1.0
+        return 1_000.0
 
     def next(self) -> None:
         fast = self.indicator(None, "ema", period=int(self.p.fast_period))

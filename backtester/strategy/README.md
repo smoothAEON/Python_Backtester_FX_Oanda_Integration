@@ -17,7 +17,9 @@ Subclass `BaseStrategy` when you want one-thesis order helpers, price-bar access
 
 Inside `run_backtest()`, strategy-visible feed time uses completed-bar semantics. Higher-timeframe context only unlocks after that bar has closed.
 
-`instrument_api` is intentionally narrower than `backtester.indicators`: it exposes the runtime-safe indicator subset and rejects repainting helpers such as `savgol_smooth`, `swing_highs_lows`, `bos_choch`, `ob`, `liquidity`, `premium_discount`, `retracements`, and `ICTFibEngine`.
+`instrument_api` is intentionally narrower than `backtester.indicators`: it exposes the runtime-safe indicator subset and rejects research-only helpers such as `savgol_smooth`, `swing_highs_lows`, `bos_choch`, `ob`, `liquidity`, `premium_discount`, `retracements`, and `ICTFibEngine`, which now live under `backtester.indicators.research`.
+
+Repo-owned strategies also declare a runtime contract. `live_safe` is the default. Strategies marked `research_only` are rejected by `run_backtest()` unless the caller explicitly opts in with `allow_research_only=True` or `--allow-research-only`.
 
 ## Example
 

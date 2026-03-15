@@ -601,6 +601,7 @@ class _OptimizationSession:
         checkpoint_every: int | None,
         checkpoint_callback: CheckpointCallback | None,
         early_stop: EarlyStopCallback | None,
+        allow_research_only: bool,
         target_trial_count: int | None,
         target_evaluations: int | None,
     ) -> None:
@@ -645,6 +646,7 @@ class _OptimizationSession:
         )
         self._checkpoint_callback = checkpoint_callback
         self._early_stop = early_stop
+        self._allow_research_only = bool(allow_research_only)
         self._target_trial_count = (
             None if target_trial_count is None else int(target_trial_count)
         )
@@ -889,6 +891,7 @@ class _OptimizationSession:
                 cash=self.cash,
                 strategy_params=parameters,
                 config=self.config,
+                allow_research_only=self._allow_research_only,
             )
             search_analyzer = PerformanceAnalyzer(search_result)
             search_metric_values = search_analyzer.metrics.to_dict()
@@ -932,6 +935,7 @@ class _OptimizationSession:
                     cash=self.cash,
                     strategy_params=parameters,
                     config=self.config,
+                    allow_research_only=self._allow_research_only,
                 )
                 evaluation_analyzer = PerformanceAnalyzer(evaluation_result)
                 evaluation_metric_values = evaluation_analyzer.metrics.to_dict()

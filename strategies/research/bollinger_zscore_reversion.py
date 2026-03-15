@@ -1,23 +1,27 @@
-"""Live-safe mean-reversion showcase using band extremes and slope confirmation."""
+"""Mean-reversion showcase strategy using limit entries and volatility sizing."""
 
 from __future__ import annotations
 
+from backtester.indicators.research import savgol_smooth
 from backtester.sizing import VolatilitySizer
 
-from ._shared import ShowcaseStrategy, latest_value, tail_is_ready
+from .._shared import ShowcaseStrategy, latest_defined_value, latest_value, tail_is_ready
 
 
 class BollingerZscoreReversionStrategy(ShowcaseStrategy):
-    """Fade band extremes only when the live-safe trend filter is not accelerating."""
+    """Fade band extremes and target the middle band."""
 
-    runtime_contract = "live_safe"
-    runtime_contract_reason = None
+    runtime_contract = "research_only"
+    runtime_contract_reason = (
+        "Imports savgol_smooth directly from the research-only indicator surface."
+    )
     params = (
         ("band_period", 5),
         ("band_stddev", 1.4),
         ("zscore_window", 5),
         ("zscore_threshold", 0.75),
         ("smoothing_window", 5),
+        ("smoothing_polyorder", 2),
         ("risk_percent", 0.004),
         ("volatility_multiplier", 1.0),
         ("stop_band_buffer", 0.6),
@@ -39,7 +43,7 @@ class BollingerZscoreReversionStrategy(ShowcaseStrategy):
             return
 
         frame = self.to_ohlcv_dataframe()
-        if len(frame) < max(int(self.p.band_period), int(self.p.zscore_window), int(self.p.smoothing_window) + 1):
+        if len(frame) < max(int(self.p.band_period), int(self.p.zscore_window), 5):
             return
 
         bands = self.indicator(
@@ -51,45 +55,44 @@ class BollingerZscoreReversionStrategy(ShowcaseStrategy):
             matype=0,
         )
         zscore = self.indicator(None, "rolling_zscore", window=int(self.p.zscore_window))
-        slope = self.indicator(
-            None,
-            "rolling_linreg_slope",
-            window=int(self.p.smoothing_window),
+        smooth = savgol_smooth(
+            frame["close"],
+            window_length=int(self.p.smoothing_window),
+            polyorder=int(self.p.smoothing_polyorder),
         )
-        trend = self.indicator(None, "ema", period=int(self.p.smoothing_window))
         if not all(
             (
                 tail_is_ready(bands, 1, "UpperBand"),
                 tail_is_ready(bands, 1, "MiddleBand"),
                 tail_is_ready(bands, 1, "LowerBand"),
                 tail_is_ready(zscore, 1),
-                tail_is_ready(slope, 1),
-                tail_is_ready(trend, 1),
             )
         ):
+            return
+        defined_smooth = smooth.dropna()
+        if len(defined_smooth) < 2:
             return
 
         upper_band = latest_value(bands, "UpperBand")
         middle_band = latest_value(bands, "MiddleBand")
         lower_band = latest_value(bands, "LowerBand")
         zscore_now = latest_value(zscore)
-        slope_now = latest_value(slope)
-        trend_now = latest_value(trend)
-        if None in {upper_band, middle_band, lower_band, zscore_now, slope_now, trend_now}:
+        smooth_prev = float(defined_smooth.iloc[-2])
+        smooth_now = latest_defined_value(defined_smooth)
+        if None in {upper_band, middle_band, lower_band, zscore_now, smooth_prev, smooth_now}:
             return
 
         band_width = max(upper_band - lower_band, self.instrument_spec.price_step)
+        smoothing_bias = smooth_now - smooth_prev
         long_signal = (
             self.mid.close <= lower_band
             and zscore_now <= -float(self.p.zscore_threshold)
-            and slope_now >= -band_width
-            and self.mid.close <= trend_now
+            and smoothing_bias >= -band_width
         )
         short_signal = (
             self.mid.close >= upper_band
             and zscore_now >= float(self.p.zscore_threshold)
-            and slope_now <= band_width
-            and self.mid.close >= trend_now
+            and smoothing_bias <= band_width
         )
 
         if long_signal and middle_band > lower_band:

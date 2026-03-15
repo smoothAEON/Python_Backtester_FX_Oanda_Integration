@@ -53,6 +53,7 @@ def run_random_search(
     checkpoint_every: int | None = None,
     checkpoint_callback: CheckpointCallback | None = None,
     early_stop: EarlyStopCallback | None = None,
+    allow_research_only: bool = False,
 ) -> OptimizationResult:
     """Run a reproducible random search over mixed parameter spaces."""
 
@@ -89,6 +90,7 @@ def run_random_search(
         checkpoint_every=checkpoint_every,
         checkpoint_callback=checkpoint_callback,
         early_stop=early_stop,
+        allow_research_only=allow_research_only,
         target_trial_count=trial_count,
         target_evaluations=None,
     )

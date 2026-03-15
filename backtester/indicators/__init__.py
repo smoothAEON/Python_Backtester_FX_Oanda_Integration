@@ -1,6 +1,6 @@
-"""Indicator wrappers and Smart Money Concepts helpers.
+"""Runtime-safe indicator wrappers and time-aware helpers.
 
-TA-Lib and scipy wrappers are imported eagerly. SMC-backed helpers are
+TA-Lib and safe scipy wrappers are imported eagerly. Time-aware SMC-backed helpers are
 resolved lazily so non-SMC flows do not import ``smartmoneyconcepts``
 until they are explicitly used.
 """
@@ -9,42 +9,40 @@ from __future__ import annotations
 
 from importlib import import_module
 
-from .scipy_indicators import rolling_linreg_slope, rolling_zscore, savgol_smooth
+from .scipy_indicators import rolling_linreg_slope, rolling_zscore
 from .talib_indicators import adx, atr, bollinger_bands, ema, macd, rsi, sma
 
 _LAZY_EXPORTS = {
-    "ICTFibEngine": (".smc", "ICTFibEngine"),
-    "bos_choch": (".smc", "bos_choch"),
-    "liquidity": (".smc", "liquidity"),
-    "ob": (".smc", "ob"),
-    "premium_discount": (".smc", "premium_discount"),
+    "CausalICTFibEngine": (".smc.causal", "CausalICTFibEngine"),
+    "confirmed_liquidity": (".smc.causal", "confirmed_liquidity"),
+    "confirmed_order_blocks": (".smc.causal", "confirmed_order_blocks"),
+    "confirmed_premium_discount": (".smc.causal", "confirmed_premium_discount"),
+    "confirmed_retracements": (".smc.causal", "confirmed_retracements"),
+    "confirmed_structure": (".smc.causal", "confirmed_structure"),
+    "confirmed_swings": (".smc.causal", "confirmed_swings"),
     "previous_high_low": (".smc", "previous_high_low"),
-    "retracements": (".smc", "retracements"),
     "sessions": (".smc", "sessions"),
-    "swing_highs_lows": (".smc", "swing_highs_lows"),
 }
 
 __all__ = [
-    "ICTFibEngine",
+    "CausalICTFibEngine",
     "adx",
     "atr",
     "bollinger_bands",
-    "bos_choch",
+    "confirmed_liquidity",
+    "confirmed_order_blocks",
+    "confirmed_premium_discount",
+    "confirmed_retracements",
+    "confirmed_structure",
+    "confirmed_swings",
     "ema",
-
-    "liquidity",
     "macd",
-    "ob",
-    "premium_discount",
     "previous_high_low",
-    "retracements",
     "rolling_linreg_slope",
     "rolling_zscore",
     "rsi",
-    "savgol_smooth",
     "sessions",
     "sma",
-    "swing_highs_lows",
 ]
 
 
